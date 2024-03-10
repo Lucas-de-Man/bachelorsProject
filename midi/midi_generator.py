@@ -29,6 +29,7 @@ for i in range(-4, 4):
     # create your MIDI object
     mf = MIDIFile(1)  # only 1 track
     mf.addTrackName(track, time, "Sample Track")
+    mf.addProgramChange(track, channel, time, 41)
     mf.addTempo(track, time, 120)
     rev_piramid_notes(mf, 8, 60 + 4*i, 4)
     with open("midis/violin" + str(i+4) + ".mid", 'wb') as outf:
