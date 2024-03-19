@@ -1,36 +1,43 @@
 from midiutil.MidiFile import MIDIFile
-import random
-
-def piramid_notes(file, nrNotes, pitch, pitchstep, duration=1, wait=1 / 2, track=0, channel=0):
-    pitch -= (nrNotes * pitchstep + pitchstep) // 2
-    for n in range(nrNotes):
-        file.addNote(track, channel, pitch + pitchstep * (n+1), n * wait, duration, 100)
-
-def rev_piramid_notes(file, nrNotes, pitch, pitchstep, duration=1, wait=1 / 2, track=0, channel=0):
-    pitch += (nrNotes * pitchstep + pitchstep) // 2
-    for n in range(nrNotes):
-        file.addNote(track, channel, pitch - pitchstep * (n+1), n * wait, duration, 100)
+import numpy as np
 
 track = 0  # the only track
 channel = 0
-time = 0  # start at the beginning
 
 
-for i in range(-4, 4):
-    # create your MIDI object
-    mf = MIDIFile(1)  # only 1 track
-    mf.addTrackName(track, time, "Sample Track")
-    mf.addTempo(track, time, 120)
-    piramid_notes(mf, 8, 60 + 4*i, 4)
-    with open("midis/piano" + str(i+4) + ".mid", 'wb') as outf:
-        mf.writeFile(outf)
+mf = MIDIFile(1)  # only 1 track
+mf.addTrackName(track, 0, "Sample Track")
+mf.addTempo(track, 0, 120)
 
-for i in range(-4, 4):
-    # create your MIDI object
-    mf = MIDIFile(1)  # only 1 track
-    mf.addTrackName(track, time, "Sample Track")
-    mf.addProgramChange(track, channel, time, 41)
-    mf.addTempo(track, time, 120)
-    rev_piramid_notes(mf, 8, 60 + 4*i, 4)
-    with open("midis/violin" + str(i+4) + ".mid", 'wb') as outf:
-        mf.writeFile(outf)
+maxtime = 100
+for _ in range(2):
+    time = 0
+    while time < maxtime:
+        if np.random.random() < 0.3:
+            time += np.random.random() * 1.5
+        else:
+            duration = np.random.random() * 1.5
+            duration = min(duration, maxtime - time)
+            mf.addNote(track, channel, 60 + np.random.randint(-16, 16), time, duration, 100)
+            time += duration
+with open("midis/piano.mid", 'wb') as outf:
+    mf.writeFile(outf)
+
+mf = MIDIFile(1)  # only 1 track
+mf.addTrackName(track, 0, "Sample Track")
+mf.addProgramChange(track, channel, 0, 41)
+mf.addTempo(track, 0, 120)
+
+maxtime = 100
+for _ in range(2):
+    time = 0
+    while time < maxtime:
+        if np.random.random() < 0.3:
+            time += np.random.random() * 1.5
+        else:
+            duration = np.random.random() * 1.5
+            duration = min(duration, maxtime - time)
+            mf.addNote(track, channel, 60 + np.random.randint(-16, 16), time, duration, 100)
+            time += duration
+with open("midis/violin.mid", 'wb') as outf:
+    mf.writeFile(outf)

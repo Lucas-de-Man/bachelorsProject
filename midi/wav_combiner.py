@@ -5,11 +5,11 @@ import numpy as np
 pianoArr = []
 violinArr = []
 for p in range(8):
-    piano = read("wavs/piano" + str(p) + ".wav")[1][:131072, 0]
+    piano = read("wavs/piano" + str(p) + ".wav")[1][:131050:25, 0]
     piano = piano - np.mean(piano)
     pianoArr.append(piano)
 for v in range(8):
-    violin = read("wavs/piano" + str(v) + ".wav")[1][:131072, 0]
+    violin = read("wavs/violin" + str(v) + ".wav")[1][:131050:25, 0]
     violin = violin - np.mean(violin)
     violinArr.append(violin)
 
@@ -21,5 +21,5 @@ for p, piano in enumerate(pianoArr):
             if p_vs_v != 10:
                 combV = piano / 10 * p_vs_v + violin
                 combV = combV.astype(np.int16)
-                write("wav_comb/comb" + str(10*p_vs_v) + "-100_" + str(p) + "-" + str(v) + ".wav", rate=44100, data=combV)
-            write("wav_comb/comb100-" + str(10*p_vs_v) + "_" + str(p) + "-" + str(v) + ".wav", rate=44100, data=combP)
+                write("wav_comb/comb" + str(10*p_vs_v) + "-100_" + str(p) + "-" + str(v) + ".wav", rate=1764, data=combV)
+            write("wav_comb/comb100-" + str(10*p_vs_v) + "_" + str(p) + "-" + str(v) + ".wav", rate=1764, data=combP)
