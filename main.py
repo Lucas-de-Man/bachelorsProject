@@ -2,8 +2,12 @@ import torch
 import numpy as np
 from torch import nn
 from torch.autograd import Variable
-from scipy.io.wavfile import read, write
+from scipy.io.wavfile import read
 import sys
+import os
+
+#for debugging
+np.random.seed(50937)
 
 device = (
     "cuda"
@@ -17,77 +21,111 @@ class Linear_regression(nn.Module):
     def __init__(self, windowsize=256):
         super().__init__()
         self.windowsize = windowsize
-        self.linear = nn.Linear((2*windowsize + 1), 2)
-        self.biasTensor = torch.tensor([1], dtype=torch.float32)
+        self.linear = nn.Linear((2*windowsize + 1), 2, bias=False)
 
     def forward(self, x):
-        #too slow
-        x = torch.cat((x, x**2, self.biasTensor))
-        return self.linear(x)
+        #making the full input at O(n)
+        input = torch.empty(2*self.windowsize + 1, dtype=torch.float32)
+        input[0] = 1
+        for i in range(self.windowsize):
+            input[i+1] = x[i]
+            input[i + self.windowsize + 1] = x[i] * x[i]
+        return self.linear(input)
 
-def split_sound(input):
-    input += np.random.normal(0, 1000, len(input)).astype(np.int16)
-    input = input.astype(np.float32) / 4000
-    input = Variable(torch.tensor(np.concatenate((np.zeros(model.windowsize), input)), dtype=torch.float32))
-    output = (model.forward(input[:model.windowsize]).detach().numpy() * 4000).astype(np.int16)
-    output = np.array([[output[0]], [output[1]]])
-    for i in range(1, len(input) - model.windowsize - 1):
-        y = (model.forward(input[i:i+model.windowsize]).detach().numpy() * 4000).astype(np.int16)
-        y = np.transpose([y])
-        output = np.concatenate((output, y), axis=1)
-    return output[0], output[1]
+def updateInput(piano, violin, inputSize):
+    input = torch.empty(inputSize, dtype=torch.float32)
+    p = np.random.randint(0, len(piano) - inputSize)
+    v = np.random.randint(0, len(violin) - inputSize)
+    for i in range(inputSize):
+        input[i] = piano[p + i] + violin[v + 1] #+ np.random.normal(0, 0.02, model.windowsize)
+    return input
 
+#65536 = 2 ^16, so the maximal possible value, so clamping it between 0 and 1
+#now between 0 and ampl
+ampl = 20
+piano = read("midi/wavs/piano.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
+violin = read("midi/wavs/violin.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
 
+piano = torch.tensor(piano, dtype=torch.float32)
+violin = torch.tensor(violin, dtype=torch.float32)
 
 model = Linear_regression().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.1)
+optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+if not os.path.exists("models"):
+    os.makedirs("models")
+if not os.path.exists("models/intermediate"):
+    os.makedirs("models/intermediate")
 
 alpha = 0.1
-BATCHSIZE = 1
-epochs = 30
-input = read("midi/wav_comb/comb100-100_7-0.wav")[1]
-#adding random noise
-write("without_noise.wav", rate=1764, data=input)
-input += np.random.normal(0, 1, len(input)).astype(np.int16) #sd of 1000 is good, but for testing keeping it on 1
-write("with_noise.wav", rate=1764, data=input)
-input = input.astype(np.float32) / 4000
-input = Variable(torch.tensor(np.concatenate((np.zeros(model.windowsize), input)), dtype=torch.float32), requires_grad=True)
+BATCHSIZE = 30
+runs = 80
+inputSize = 2 * model.windowsize
+losses = np.zeros((runs, 4))
+intermediateModels = 10
+times = []
 
-#not an epoch, just an gradient decent update
-for epoch in range(epochs):
+if intermediateModels >= runs:
+    intermediateModels = min(runs, 4)
+
+for run in range(runs):
     optimizer.zero_grad()
-    loss = Variable(torch.tensor(0, dtype=torch.float32), requires_grad=True)
-    running_mean = Variable(torch.tensor([0, 0], dtype=torch.float32), requires_grad=True)
-    running_variance = Variable(torch.tensor([0, 0], dtype=torch.float32), requires_grad=True)
-    running_dot = Variable(torch.tensor(0, dtype=torch.float32), requires_grad=True)
-    running_mag = Variable(torch.tensor([1, 1], dtype=torch.float32), requires_grad=True)
+    loss = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
+    #expect a mean of 0 in the limit
+    running_mean = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
+    #in the limit we expect a similar variance to the input, I might implement an expected value
+    running_variance = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
+    #in the limit we want a dot product of 0
+    running_dot = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
+    #in the limit we expect a magnitude equal to the mean amplitude, now around 1 (more towards 1/3 but close enough)
+    running_mag = Variable(torch.ones(2, dtype=torch.float32), requires_grad=True)
 
     #debug variables
-    MSE = torch.tensor(0, dtype=torch.float32)
-    VAR = torch.tensor(0, dtype=torch.float32)
-    DOT = torch.tensor(0, dtype=torch.float32)
+    MSE = torch.zeros(1, dtype=torch.float32)
+    VAR = torch.zeros(1, dtype=torch.float32)
+    DOT = torch.zeros(1, dtype=torch.float32)
 
     for batch in range(BATCHSIZE):
-        for i in range(len(input) - model.windowsize - 1):
+        input = updateInput(piano, violin, inputSize)
+        for i in range(inputSize - model.windowsize):
             x = input[i:i+model.windowsize]
             y = model.forward(x)
             running_mean = running_mean * (1 - alpha) + alpha * y
             running_variance = running_variance * (1 - alpha) + alpha * ((y - running_mean) ** 2)
             running_mag = running_mag * (1 - alpha) + alpha * (y ** 2)
             running_dot = running_dot * (1 - alpha) + alpha * y[0] * y[1]
-            MSE += (input[i+model.windowsize+1] - y[0] - y[1]) ** 2
-            VAR += running_variance[0] * running_variance[1]
-            DOT += running_dot ** 2 / (running_mag[0] * running_mag[1])
-            loss = loss + (input[i+model.windowsize+1] - y[0] - y[1]) ** 2 - running_variance[0] * running_variance[1] / 10000 + running_dot ** 2 / (running_mag[0] * running_mag[1])
-    loss = loss / BATCHSIZE / len(input) / model.windowsize
-    print('epoch ', 1+epoch, '/', epochs, ', final loss:', loss.item())
+            #input[i + model.windowsize // 2] to have it estimate the middle sample of the input
+            mse = (input[i + model.windowsize // 2] - y[0] - y[1]) ** 2 / (ampl * ampl)
+            #maybe use an sigmoid around the variance, to limit the value of brining it to infinity
+            var = torch.sigmoid(running_variance[0] * running_variance[1])
+            #test why this keeps being significantly greater than 1
+            dot = running_dot ** 2 / (running_mag[0] * running_mag[1])
+            MSE += mse
+            VAR += var
+            DOT += dot
+            loss = loss + mse - var + dot
+    loss = loss / BATCHSIZE
+    print('run ', 1+run, '/', runs, ', final loss:', loss.item())
     print(MSE.item(), VAR.item(), DOT.item())
-    if epoch != epochs - 1:
-        print("updating...")
-        loss.backward()
-        optimizer.step()
+    losses[run][0] = loss.item()
+    losses[run][1] = MSE.item() / BATCHSIZE
+    losses[run][2] = VAR.item() / BATCHSIZE
+    losses[run][3] = DOT.item() / BATCHSIZE
+    print("updating...")
+    loss.backward()
+    optimizer.step()
     print("done.")
+    if run % (runs // intermediateModels) == 0:
+        torch.save(model.state_dict(), "models/intermediate/model" + str(int(run / (runs // intermediateModels))) + ".pt")
+        times.append(run)
 
-y0, y1 = split_sound(read("midi/wav_comb/comb100-100_7-0.wav")[1])
-write("out0.wav", rate=1764, data=y0)
-write("out1.wav", rate=1764, data=y1)
+
+#saving the model and the losses for later analysis
+torch.save(model.state_dict(), "models/model.pt")
+
+with open('models/losses.npy', 'wb') as f:
+    np.save(f, losses)
+with open('models/times.npy', 'wb') as f:
+    np.save(f, times)
+with open('models/data.npy', 'wb') as f:
+    np.save(f, np.array([ampl]))
