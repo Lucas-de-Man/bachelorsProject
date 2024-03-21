@@ -50,24 +50,39 @@ piano = torch.tensor(piano, dtype=torch.float32)
 violin = torch.tensor(violin, dtype=torch.float32)
 
 model = Linear_regression().to(device)
-optimizer = torch.optim.Adam(model.parameters(), lr=0.01)
+
+optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
 if not os.path.exists("models"):
     os.makedirs("models")
 if not os.path.exists("models/intermediate"):
     os.makedirs("models/intermediate")
 
-alpha = 0.1
-BATCHSIZE = 30
-runs = 80
-inputSize = 2 * model.windowsize
+#used hyper parameter search, this alpha works quite well
+alpha = 0.01
+runs = 100
+BATCHSIZE = 50
+#used hyper parameter search, 8 was the best but not by a long shot, anything greater than 6 is fine
+inputSize = 8 * model.windowsize
 losses = np.zeros((runs, 4))
-intermediateModels = 10
-times = []
+intermediateModels = 20
+
+if False:
+    model_name = 'models-500-50-2'
+    optimizer.load_state_dict(torch.load(model_name + '/adam.pt'))
+    model.load_state_dict(torch.load(model_name + '/model.pt'))
+    with open(model_name + "/losses.npy", 'rb') as f:
+        old = np.load(f)
+    with open(model_name + "/times.npy", 'rb') as f:
+        times = np.load(f)
+    losses = np.concatenate((old, losses))
+else:
+    times = np.array([])
 
 if intermediateModels >= runs:
     intermediateModels = min(runs, 4)
 
+print("started.")
 for run in range(runs):
     optimizer.zero_grad()
     loss = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
@@ -78,7 +93,7 @@ for run in range(runs):
     #in the limit we want a dot product of 0
     running_dot = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
     #in the limit we expect a magnitude equal to the mean amplitude, now around 1 (more towards 1/3 but close enough)
-    running_mag = Variable(torch.ones(2, dtype=torch.float32), requires_grad=True)
+    running_mag = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
 
     #debug variables
     MSE = torch.zeros(1, dtype=torch.float32)
@@ -98,34 +113,35 @@ for run in range(runs):
             mse = (input[i + model.windowsize // 2] - y[0] - y[1]) ** 2 / (ampl * ampl)
             #maybe use an sigmoid around the variance, to limit the value of brining it to infinity
             var = torch.sigmoid(running_variance[0] * running_variance[1])
-            #test why this keeps being significantly greater than 1
-            dot = running_dot ** 2 / (running_mag[0] * running_mag[1])
+            #the main goal of the model is to lower the dot product, so I give it a higher weight
+            dot = running_dot ** 2 / (running_mag[0] * running_mag[1]) * 5
             MSE += mse
             VAR += var
             DOT += dot
             loss = loss + mse - var + dot
-    loss = loss / BATCHSIZE
-    print('run ', 1+run, '/', runs, ', final loss:', loss.item())
-    print(MSE.item(), VAR.item(), DOT.item())
+    loss = loss / BATCHSIZE / (inputSize - model.windowsize)
+    print('run ', 1+run, '/', runs, ', loss:', loss.item())
     losses[run][0] = loss.item()
-    losses[run][1] = MSE.item() / BATCHSIZE
-    losses[run][2] = VAR.item() / BATCHSIZE
-    losses[run][3] = DOT.item() / BATCHSIZE
+    losses[run][1] = MSE.item() / BATCHSIZE / (inputSize - model.windowsize)
+    losses[run][2] = VAR.item() / BATCHSIZE / (inputSize - model.windowsize)
+    losses[run][3] = DOT.item() / BATCHSIZE / (inputSize - model.windowsize)
+    print("MSE", losses[run][1], "VAR", losses[run][2], "DOT", losses[run][3])
     print("updating...")
     loss.backward()
     optimizer.step()
     print("done.")
-    if run % (runs // intermediateModels) == 0:
-        torch.save(model.state_dict(), "models/intermediate/model" + str(int(run / (runs // intermediateModels))) + ".pt")
-        times.append(run)
+    if (run + 1) % (runs // intermediateModels) == 0:
+        torch.save(model.state_dict(), "models/intermediate/model" + str(int((run + 1) / (runs // intermediateModels))) + ".pt")
+        times = np.append(times, run)
 
 
 #saving the model and the losses for later analysis
 torch.save(model.state_dict(), "models/model.pt")
+torch.save(optimizer.state_dict(), "models/adam.pt")
 
 with open('models/losses.npy', 'wb') as f:
     np.save(f, losses)
 with open('models/times.npy', 'wb') as f:
     np.save(f, times)
 with open('models/data.npy', 'wb') as f:
-    np.save(f, np.array([ampl]))
+    np.save(f, np.array([ampl, model.windowsize]))
