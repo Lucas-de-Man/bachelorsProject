@@ -67,8 +67,8 @@ inputSize = 8 * model.windowsize
 losses = np.zeros((runs, 4))
 intermediateModels = 20
 
-if False:
-    model_name = 'models-500-50-2'
+if True:
+    model_name = 'models-100-50-8'
     optimizer.load_state_dict(torch.load(model_name + '/adam.pt'))
     model.load_state_dict(torch.load(model_name + '/model.pt'))
     with open(model_name + "/losses.npy", 'rb') as f:
@@ -96,7 +96,7 @@ for run in range(runs):
     running_mag = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
 
     #debug variables
-    MSE = torch.zeros(1, dtype=torch.float32)
+    MSE = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
     VAR = torch.zeros(1, dtype=torch.float32)
     DOT = torch.zeros(1, dtype=torch.float32)
 
@@ -115,19 +115,31 @@ for run in range(runs):
             var = torch.sigmoid(running_variance[0] * running_variance[1])
             #the main goal of the model is to lower the dot product, so I give it a higher weight
             dot = running_dot ** 2 / (running_mag[0] * running_mag[1]) * 5
-            MSE += mse
+            MSE = MSE + mse
             VAR += var
             DOT += dot
-            loss = loss + mse - var + dot
+            loss = loss - var + dot
+    MSE = MSE / BATCHSIZE / (inputSize - model.windowsize)
     loss = loss / BATCHSIZE / (inputSize - model.windowsize)
     print('run ', 1+run, '/', runs, ', loss:', loss.item())
     losses[run][0] = loss.item()
-    losses[run][1] = MSE.item() / BATCHSIZE / (inputSize - model.windowsize)
+    losses[run][1] = MSE.item()
     losses[run][2] = VAR.item() / BATCHSIZE / (inputSize - model.windowsize)
     losses[run][3] = DOT.item() / BATCHSIZE / (inputSize - model.windowsize)
     print("MSE", losses[run][1], "VAR", losses[run][2], "DOT", losses[run][3])
     print("updating...")
+    #torch.autograd.backward(loss)
+    MSE.retain_grad()
+    model.linear.weight.retain_grad()
+    MSE.backward(retain_graph=True)
+    #n is the gradient of the MSE loss
+    n = model.linear.weight.grad
     loss.backward()
+    #gradient is the gradient of the total loss (exclusief MSE)
+    gradient = model.linear.weight.grad
+    #gradient - (gradient * n) / (abs(n) ** 2) * n makes sure the dot product and variance can only be changed
+    #without changing the MSE score. We add n (the MSE gradient) to move closer to an MSE loss of 0.
+    model.linear.weight.grad = gradient - torch.tensordot(gradient, n) / torch.tensordot(n, n) * n + n
     optimizer.step()
     print("done.")
     if (run + 1) % (runs // intermediateModels) == 0:

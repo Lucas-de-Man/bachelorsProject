@@ -91,7 +91,7 @@ def plotValidatons(subplot, width=5, start=10):
     for i in range(models):
         print('model', i, '/', models)
         model = Linear_regression(windowsize)
-        model.load_state_dict(torch.load(MODEL_FOLDER + '/intermediate/model' + str(i) + '.pt'))
+        model.load_state_dict(torch.load(MODEL_FOLDER + '/intermediate/model' + str(i + 1) + '.pt'))
         if i == 0:
             test_in = test_in[start:start + width * windowsize]
         c0, c1 = runModel(model, test_in)
@@ -324,13 +324,13 @@ ax[0].plot(c0[:1000])
 ax[1].plot(c1[:1000])
 plt.show()
 '''
-print(testDOT(32))
+
 #makeWavs(20)
 
 '''
 fig, ax = plt.subplots(2, 3)
 plotLosses(ax[0][0])
-#DOTvsMSE(ax[0][2])
+DOTvsMSE(ax[0][2])
 plotChannels([ax[0][1], ax[0][2], ax[1][1], ax[1][2]])
 #plotValidatons(ax[1][0], 2)
 plt.show()
