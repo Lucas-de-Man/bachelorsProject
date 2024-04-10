@@ -5,16 +5,16 @@ from scipy.io.wavfile import read, write
 
 print('plotting...')
 
-MODEL_FOLDER = 'models'
+MODEL_FOLDER = 'models-newloss'
 with open(MODEL_FOLDER + "/data.npy", 'rb') as f:
     data = np.load(f)
 ampl = data[0]
-windowsize = 256#data[1]
+windowsize = data[1]
 PIANO = read("midi/wavs/piano.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
 VIOLIN = read("midi/wavs/violin.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
 
 
-
+#OUTDATED! USE ONLU FOR OLD MODELS
 class Linear_regression(torch.nn.Module):
     def __init__(self, windowsize=256):
         super().__init__()
@@ -204,6 +204,7 @@ def alphaSpeed(plot, alpha=0.1, width=2, start=10):
     ax2.plot(MAG, 'red')
     plot[2].plot(DOT_norm)
     plot[2].plot(true_DOT / true_mag * np.ones(width))
+    plot[2].legend(['running dot', 'true dot'])
 
 def scoreAlpha(alpha=0.01, rep=3, width=2):
     if width <= 1:
@@ -236,7 +237,7 @@ def scoreAlpha(alpha=0.01, rep=3, width=2):
             DOT += (running_dot ** 2 / (running_mag[0] * running_mag[1]) - true_dot) ** 2
     return VAR / (rep * width), DOT / (rep * width)
 
-def plotAlphaScores(plot, rep: int =128, r: int =32, width: int | float =2):
+def plotAlphaScores(plot, rep: int =128, r: int =32, width: int | float =8):
     VARS = []
     DOTS = []
     #use range between [0.0001, 0.5], a * (b ** i), (0, 0.5), (r, 2^-10 = 0.0001), gives:
@@ -253,7 +254,7 @@ def plotAlphaScores(plot, rep: int =128, r: int =32, width: int | float =2):
     ax2.set_ylabel("dots", color='red')
     ax2.plot(r, DOTS, 'red')
 
-def plotWidthScore(plot, rep: int =128, r: int =32, alpha: float =0.01, domain=(1, 15)):
+def plotWidthScore(plot, rep: int =128, r: int =32, alpha: float =0.005, domain=(1, 15)):
     s, e = domain
     if s < 1:
         s = 1
@@ -290,22 +291,61 @@ def testDOT(rep=8, width=8):
         DOT += sum(c0 * c1) ** 2 / (sum(c0 ** 2) * sum(c1 ** 2))
     return DOT / rep
 
+def trueDOT(rep=1024, width=8):
+    width *= windowsize
+    DOT = 0
+    for _ in range(rep):
+        startP = np.random.randint(0, len(PIANO) - width)
+        startV = np.random.randint(0, len(VIOLIN) - width)
+        p = PIANO[startP:startP + width]
+        v = VIOLIN[startV:startV + width]
+        DOT += (np.dot(p, v) ** 2) / (sum(p ** 2) * sum(v ** 2))
+    return DOT / rep
+
+def plotSums(plot, width=2):
+    if width <= 1:
+        width = 2
+    width *= windowsize
+    ps = np.random.randint(0, len(PIANO) - width)
+    vs = np.random.randint(0, len(VIOLIN) - width)
+    piano = PIANO[ps:ps+width]
+    violin = VIOLIN[vs:vs+width]
+    sum = piano + violin
+    model = Linear_regression(windowsize)
+    model.load_state_dict(torch.load(MODEL_FOLDER + '/model.pt'))
+    c0, c1 = runModel(model, sum)
+    plot[0][0].plot(sum)
+    plot[0][0].title.set_text('input')
+    plot[0][1].plot(violin)
+    plot[0][1].title.set_text('violin')
+    plot[0][2].plot(piano)
+    plot[0][2].title.set_text('piano')
+
+    plot[1][0].plot(c0 + c1)
+    plot[1][0].title.set_text('out sum')
+    plot[1][1].plot(c0)
+    plot[1][1].title.set_text('chanel 0')
+    plot[1][2].plot(c1)
+    plot[1][2].title.set_text('chanel 1')
+
 #                               finding the best width factor (~8, not super exact, 4 and up is fine)
 '''
 plotWidthScore(plt, 512, 64)
+plt.legend(['vars', 'dots'])
 plt.show()
 '''
 
-#                               finding the best alpha (0.01)
+#                               finding the best alpha (0.005)
 '''
-plotAlphaScores(plt)
+plotAlphaScores(plt, rep=1024)
+plt.legend(['vars', 'dots'])
 plt.show()
 '''
 
 #                               plotting how the running averages change based on alpha
 '''
 fig, ax = plt.subplots(3, 1)
-alphaSpeed(ax, 0.01, 2)
+alphaSpeed(ax, 0.005, 8)
 plt.show()
 '''
 
@@ -325,6 +365,11 @@ ax[1].plot(c1[:1000])
 plt.show()
 '''
 
+#0.012628419043605201 (DOT squared)
+#print(trueDOT(1024 * 64))
+#0.0006185975267848991 (DOT squared)
+#print(testDOT())
+
 #makeWavs(20)
 
 '''
@@ -332,6 +377,13 @@ fig, ax = plt.subplots(2, 3)
 plotLosses(ax[0][0])
 DOTvsMSE(ax[0][2])
 plotChannels([ax[0][1], ax[0][2], ax[1][1], ax[1][2]])
-#plotValidatons(ax[1][0], 2)
+plotValidatons(ax[1][0], 2)
+plt.show()
+#print(testDOT())
+'''
+
+'''
+fig, ax = plt.subplots(2, 3)
+plotSums(ax)
 plt.show()
 '''
