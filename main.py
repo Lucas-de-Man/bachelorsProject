@@ -1,9 +1,6 @@
-import torch
 import numpy as np
-from torch import nn
-from torch.autograd import Variable
 from scipy.io.wavfile import read
-import sys
+from matplotlib import pyplot as plt
 import os
 
 #for debugging
@@ -16,11 +13,22 @@ piano = read("midi/wavs/piano.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
 violin = read("midi/wavs/violin.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
 
 class Model():
-    def __init__(self, windowsize=256, alpha=0.001, lr=0.001):
+    def __init__(self, windowsize=256, alpha=0.001, lr=0.001, b1=0.9, b2=0.99):
         self.windowsize = windowsize
         self.weights = np.random.normal(0, 0.1, 2*windowsize + 1)
         self.alpha = alpha
+
+        #parameters for adam
         self.lr = lr
+        #starting values
+        self.b1 = b1
+        self.b2 = b2
+        #decaying values
+        self.b1t = 1
+        self.b2t = 1
+        #first and second order moment estimations
+        self.m = np.zeros(len(self.weights))
+        self.v = np.zeros(len(self.weights))
 
         self.mean = np.zeros(2)
         self.mag = np.zeros(2)
@@ -41,19 +49,20 @@ class Model():
         self.dot_grad = np.zeros(self.weights.shape)
         self.total_grad = np.zeros(self.weights.shape)
 
-    def updateGrads(self, x, y):
-        for d in range(len(x)):
+    def updateGrads(self, x, start, y):
+        for i in range(len(x)):
+            d = (i + start) % len(x)
             #mean grads
-            self.mean_grad[0][d] = (1 - self.alpha) * self.mean_grad[0][d] + x[d]
-            self.mean_grad[1][d] = (1 - self.alpha) * self.mean_grad[1][d] - x[d]
+            self.mean_grad[0][i] = (1 - self.alpha) * self.mean_grad[0][i] + x[d]
+            self.mean_grad[1][i] = -self.mean_grad[0][d]
             #mag grads
-            self.mag_grad[0][d] = (1 - self.alpha) * self.mag_grad[0][d] + x[d] * y[0]
-            self.mag_grad[1][d] = (1 - self.alpha) * self.mag_grad[0][d] - x[d] * y[1]
-            #var grads
-            self.var_grad[0][d] = (1 - self.alpha) * self.var_grad[0][d] + (y[0] - self.mean[0]) * (x[d] - self.alpha * self.mean_grad[0][d]) * 2
-            self.var_grad[1][d] = (1 - self.alpha) * self.var_grad[1][d] - (y[1] - self.mean[1]) * (x[d] - self.alpha * self.mean_grad[1][d]) * 2
+            self.mag_grad[0][i] = (1 - self.alpha) * self.mag_grad[0][i] + x[d] * y[0]
+            self.mag_grad[1][i] = (1 - self.alpha) * self.mag_grad[1][i] - x[d] * y[1]
             #dot grad
-            self.dot_grad[d] = (1 - self.alpha) * self.dot_grad[d] + (y[1] - y[0]) * x[d]
+            self.dot_grad[i] = (1 - self.alpha) * self.dot_grad[i] + (y[1] - y[0]) * x[d]
+            #var grads
+            self.var_grad[0][i] = (1 - self.alpha) * self.var_grad[0][i] + (y[0] - self.mean[0]) * (x[d] - self.alpha * self.mean_grad[0][i]) * 2
+            self.var_grad[1][i] = (1 - self.alpha) * self.var_grad[1][i] - (y[1] - self.mean[1]) * (x[d] - self.alpha * self.mean_grad[1][i]) * 2
         #biasess
         # mean grads
         d = self.windowsize * 2
@@ -61,7 +70,7 @@ class Model():
         self.mean_grad[1][d] = (1 - self.alpha) * self.mean_grad[1][d] - 1
         # mag grads
         self.mag_grad[0][d] = (1 - self.alpha) * self.mag_grad[0][d] + y[0]
-        self.mag_grad[1][d] = (1 - self.alpha) * self.mag_grad[0][d] - y[1]
+        self.mag_grad[1][d] = (1 - self.alpha) * self.mag_grad[1][d] - y[1]
         # var grads
         self.var_grad[0][d] = (1 - self.alpha) * self.var_grad[0][d] + (y[0] - self.mean[0]) * (1 - self.alpha * self.mean_grad[0][d]) * 2
         self.var_grad[1][d] = (1 - self.alpha) * self.var_grad[1][d] - (y[1] - self.mean[1]) * (1 - self.alpha * self.mean_grad[1][d]) * 2
@@ -74,7 +83,18 @@ class Model():
         top += (self.var[0] * self.var[1] - self.dot * self.dot) * diff
         self.total_grad += top / (mags * mags)
 
-    def run(self, startP, startV, length):
+    def adam(self):
+        self.b1t *= self.b1
+        self.b2t *= self.b2
+
+        self.m = self.b1 * self.m + (1 - self.b1) * self.total_grad
+        self.v = self.b2 * self.v + (1 - self.b2) * self.total_grad * self.total_grad
+
+        a = self.lr * np.sqrt(1 - self.b2t) / (1 - self.b1t)
+        return a * self.m / (np.sqrt(self.v) + 1.e-6)
+
+    def train(self, startP, startV, length, report_loss=True):
+        losses = np.empty(length - self.windowsize)
         #reset running averages
         self.mean = np.zeros(2)
         self.mag = np.zeros(2)
@@ -101,177 +121,76 @@ class Model():
             error = y - self.mean
             self.var = (1 - self.alpha) * self.var + self.alpha * error * error
             self.dot = (1 - self.alpha) * self.dot + self.alpha * y[0] * y[1]
+            if report_loss:
+                losses[t] = (self.dot * self.dot - self.var[0] * self.var[1]) / (self.mag[0] * self.mag[1])
             #updating gradients
-            self.updateGrads(input, y)
+            self.updateGrads(input, start, y)
             #stepping one step forward
             input[start] = piano[startP + t + self.windowsize] + violin[startV + t + self.windowsize]
             input[start + self.windowsize] = input[start] * input[start]
             start = (start + 1) % self.windowsize
-        self.weights -= self.lr * self.total_grad / (length - self.windowsize)
+        self.weights -= self.adam()
+        return losses
 
     #for running a trained network
-    def forward(self, timeseries):
-        out = np.empty((len(timeseries) - self.windowsize, 2))
+    def forward(self, startP, startV, length):
+        out = np.empty((length - self.windowsize, 2))
         input = np.empty(2*self.windowsize)
         start = 0
         for i in range(self.windowsize):
-            input[i] = timeseries[i]
-            input[i+self.windowsize] = timeseries[i] * timeseries[i]
+            input[i] = piano[startP + i] + violin[startV + i]
+            input[i+self.windowsize] = input[i] * input[i]
         for j in range(len(out)):
             out[j][0] = self.weights[2*self.windowsize] #add bias first
             for i in range(self.windowsize):
                 out[j][0] += self.weights[i] * input[(start + i) % self.windowsize] #linear terms
                 out[j][0] += self.weights[i + self.windowsize] * input[(start + i) % self.windowsize + self.windowsize] #quadratic terms
             out[j][1] = input[(start + self.windowsize // 2) % self.windowsize] - out[j][0]
-            input[start] = timeseries[j + self.windowsize]
-            input[start + self.windowsize] = timeseries[j + self.windowsize] * timeseries[j + self.windowsize]
+            input[start] = piano[startP + j + self.windowsize] + violin[startV + j + self.windowsize]
+            input[start + self.windowsize] = input[start] * input[start]
             start = (start + 1) % self.windowsize
         return out
 
-#print(model.forward(timeseries))
-
-sys.exit()
-
-device = (
-    "cuda"
-    if torch.cuda.is_available()
-    else "mps"
-    if torch.backends.mps.is_available()
-    else "cpu"
-)
-
-class Linear_regression(nn.Module):
-    def __init__(self, windowsize=256):
-        super().__init__()
-        self.windowsize = windowsize
-        self.change = torch.zeros(2*windowsize + 1)
-        self.linear = nn.Linear(2*windowsize + 1, 1, bias=False)
-
-    def forward(self, x):
-        out = torch.zeros(2)
-        #computing linear with the squares
+    #evaluating the current network
+    def losses(self, startP, startV, length):
+        losses = np.empty(length - self.windowsize)
+        input = np.empty(2*self.windowsize)
+        start = 0
         for i in range(self.windowsize):
-            out[0] += self.linear.weight[0][i] * x[i] + self.linear.weight[0][i + self.windowsize] * x[i] * x[i]
-        #adding the bias term
-        out[0] += self.linear.weight[0][2*self.windowsize]
-        #creating chanel 2
-        #every weight in chanel 2 should be negative chanel 1, exept at k = windowsize // 2, where they should sum to 1
-        #this means w0k + w1k = 1 => w1k = 1 - w0k. After summing all values this is the same as adding xk.
-        out[1] = x[self.windowsize // 2] - out[0]
-        return out
+            input[i] = piano[startP + i] + violin[startV + i]
+            input[i+self.windowsize] = input[i] * input[i]
+        out = np.empty(2)
+        mean = np.zeros(2)
+        mag = np.zeros(2)
+        var = np.zeros(2)
+        dot = 0
+        for j in range(len(losses)):
+            out[0] = self.weights[2*self.windowsize] #add bias first
+            for i in range(self.windowsize):
+                out[0] += self.weights[i] * input[(start + i) % self.windowsize] #linear terms
+                out[0] += self.weights[i + self.windowsize] * input[(start + i) % self.windowsize + self.windowsize] #quadratic terms
+            out[1] = input[(start + self.windowsize // 2) % self.windowsize] - out[0]
 
-def updateInput(piano, violin, inputSize):
-    input = torch.empty(inputSize, dtype=torch.float32)
-    p = np.random.randint(0, len(piano) - inputSize)
-    v = np.random.randint(0, len(violin) - inputSize)
-    for i in range(inputSize):
-        input[i] = piano[p + i] + violin[v + i] #+ np.random.normal(0, 0.02, model.windowsize)
-    return input
+            mean = (1 - self.alpha) * mean + self.alpha * out
+            var = (1 - self.alpha) * var + self.alpha * (out - mean) * (out - mean)
+            mag = (1 - self.alpha) * mag + self.alpha * out * out
+            dot = (1 - self.alpha) * dot + self.alpha * out[0] * out[1]
+            losses[j] = (dot * dot - var[0] * var[1]) / (mag[0] * mag[1])
 
+            input[start] = piano[startP + j + self.windowsize] + violin[startV + j + self.windowsize]
+            input[start + self.windowsize] = input[start] * input[start]
+            start = (start + 1) % self.windowsize
+        return losses
 
-
-piano = torch.tensor(piano, dtype=torch.float32)
-violin = torch.tensor(violin, dtype=torch.float32)
-
-model = Linear_regression().to(device)
-
-optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-
-if not os.path.exists("models"):
-    os.makedirs("models")
-if not os.path.exists("models/intermediate"):
-    os.makedirs("models/intermediate")
-
-#used hyper parameter search, this alpha works quite well
-alpha = 0.005
-runs = 100
-BATCHSIZE = 50
-#used hyper parameter search, 8 was the best but not by a long shot, anything greater than 6 is fine
-#do way longer
-inputSize = 8 * model.windowsize
-losses = np.zeros((runs, 3))
-intermediateModels = 20
-
-if False:
-    model_name = 'models-100-50-8'
-    print("using", model_name)
-    optimizer.load_state_dict(torch.load(model_name + '/adam.pt'))
-    model.load_state_dict(torch.load(model_name + '/model.pt'))
-    with open(model_name + "/losses.npy", 'rb') as f:
-        old = np.load(f)
-    with open(model_name + "/times.npy", 'rb') as f:
-        times = np.load(f)
-    startL = len(old)
-    startT = len(times)
-    oldEnd = times[-1]
-    losses = np.concatenate((old, losses))
-    for i in range(startT):
-        dict = torch.load(model_name + '/intermediate/model' + str(i + 1) + '.pt')
-        torch.save(dict, 'models/intermediate/model' + str(i + 1) + '.pt')
-else:
-    startT = 0
-    startL = 0
-    oldEnd = 0
-    times = np.array([])
-
-if intermediateModels >= runs:
-    intermediateModels = min(runs, 4)
-
-print("started.")
-for run in range(runs):
-    optimizer.zero_grad()
-    loss = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
-    #expect a mean of 0 in the limit
-    running_mean = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
-    #in the limit we expect a similar variance to the input, I might implement an expected value
-    running_variance = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
-    #in the limit we want a dot product of 0
-    running_dot = Variable(torch.zeros(1, dtype=torch.float32), requires_grad=True)
-    #in the limit we expect a magnitude equal to the mean amplitude, now around 1 (more towards 1/3 but close enough)
-    running_mag = Variable(torch.zeros(2, dtype=torch.float32), requires_grad=True)
-
-    #debug variables
-    VAR = torch.zeros(1, dtype=torch.float32)
-    DOT = torch.zeros(1, dtype=torch.float32)
-
-    for batch in range(BATCHSIZE):
-        input = updateInput(piano, violin, inputSize)
-        for i in range(inputSize - model.windowsize):
-            x = input[i:i+model.windowsize]
-            y = model.forward(x)
-            running_mean = running_mean * (1 - alpha) + alpha * y
-            running_variance = running_variance * (1 - alpha) + alpha * ((y - running_mean) ** 2)
-            running_mag = running_mag * (1 - alpha) + alpha * (y ** 2)
-            running_dot = running_dot * (1 - alpha) + alpha * y[0] * y[1]
-            #normalizing the variance to not let it blow up to infinity
-            var = running_variance[0] * running_variance[1] / torch.sqrt(running_mag[0] * running_mag[1])
-            #the main goal of the model is to lower the dot product, so I give it a higher weight
-            dot = running_dot ** 2 / (running_mag[0] * running_mag[1]) * 5
-            VAR += var
-            DOT += dot
-            loss = loss - var + dot
-    loss = loss / BATCHSIZE / (inputSize - model.windowsize)
-    print('run ', 1+run, '/', runs, ', loss:', loss.item())
-    losses[run + startL][0] = loss.item()
-    losses[run + startL][1] = VAR.item() / BATCHSIZE / (inputSize - model.windowsize)
-    losses[run + startL][2] = DOT.item() / BATCHSIZE / (inputSize - model.windowsize)
-    print("VAR", losses[run + startL][1], "DOT", losses[run + startL][2])
-    print("updating...")
-    loss.backward()
-    optimizer.step()
-    print("done.")
-    if (run + 1) % (runs // intermediateModels) == 0:
-        torch.save(model.state_dict(), "models/intermediate/model" + str(startT + int((run + 1) / (runs // intermediateModels))) + ".pt")
-        times = np.append(times, run + oldEnd)
-
-
-#saving the model and the losses for later analysis
-torch.save(model.state_dict(), "models/model.pt")
-torch.save(optimizer.state_dict(), "models/adam.pt")
-
-with open('models/losses.npy', 'wb') as f:
-    np.save(f, losses)
-with open('models/times.npy', 'wb') as f:
-    np.save(f, times)
-with open('models/data.npy', 'wb') as f:
-    np.save(f, np.array([ampl, model.windowsize]))
+model = Model(1024, lr=10)
+rep = 120
+length = model.windowsize + 1000
+mean_loss = np.empty(rep)
+for i in range(rep):
+    print(i)
+    p = np.random.randint(0, len(piano) - length)
+    v = np.random.randint(0, len(violin) - length)
+    losses = model.train(p, v, length)
+    mean_loss[i] = sum(losses) / len(losses)
+plt.plot(mean_loss)
+plt.show()
