@@ -1,22 +1,25 @@
 import numpy as np
 from scipy.io.wavfile import read
-from matplotlib import pyplot as plt
 import os
-
-#for debugging
-np.random.seed(50937)
 
 #65536 = 2 ^16, so the maximal possible value, so clamping it between 0 and 1
 #now between 0 and ampl
-ampl = 20
-piano = read("midi/wavs/piano.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
-violin = read("midi/wavs/violin.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
+ampl = 100
+#piano = read("midi/wavs/piano.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
+#violin = read("midi/wavs/violin.wav")[1][:, 0].astype(np.float32) / 65536 * ampl
+with open('music/music.npy', 'rb') as f:
+    piano = np.load(f)
+    violin = np.load(f)
+
 
 class Model():
-    def __init__(self, windowsize=256, alpha=0.001, lr=0.001, b1=0.9, b2=0.99):
+    def __init__(self, windowsize=256, alpha=0.004, lr=0.0001, dotWeight=0.5, b1=0.9, b2=0.99):
         self.windowsize = windowsize
-        self.weights = np.random.normal(0, 0.1, 2*windowsize + 1)
+        self.weights = np.random.normal(0, 10 / windowsize, 2*windowsize + 1)
         self.alpha = alpha
+
+        self.dotWeight = dotWeight
+        self.varWeight = self.dotWeight
 
         #parameters for adam
         self.lr = lr
@@ -56,8 +59,8 @@ class Model():
             self.mean_grad[0][i] = (1 - self.alpha) * self.mean_grad[0][i] + x[d]
             self.mean_grad[1][i] = -self.mean_grad[0][d]
             #mag grads
-            self.mag_grad[0][i] = (1 - self.alpha) * self.mag_grad[0][i] + x[d] * y[0]
-            self.mag_grad[1][i] = (1 - self.alpha) * self.mag_grad[1][i] - x[d] * y[1]
+            self.mag_grad[0][i] = (1 - self.alpha) * self.mag_grad[0][i] + x[d] * y[0] * 2
+            self.mag_grad[1][i] = (1 - self.alpha) * self.mag_grad[1][i] - x[d] * y[1] * 2
             #dot grad
             self.dot_grad[i] = (1 - self.alpha) * self.dot_grad[i] + (y[1] - y[0]) * x[d]
             #var grads
@@ -69,8 +72,8 @@ class Model():
         self.mean_grad[0][d] = (1 - self.alpha) * self.mean_grad[0][d] + 1
         self.mean_grad[1][d] = (1 - self.alpha) * self.mean_grad[1][d] - 1
         # mag grads
-        self.mag_grad[0][d] = (1 - self.alpha) * self.mag_grad[0][d] + y[0]
-        self.mag_grad[1][d] = (1 - self.alpha) * self.mag_grad[1][d] - y[1]
+        self.mag_grad[0][d] = (1 - self.alpha) * self.mag_grad[0][d] + y[0] * 2
+        self.mag_grad[1][d] = (1 - self.alpha) * self.mag_grad[1][d] - y[1] * 2
         # var grads
         self.var_grad[0][d] = (1 - self.alpha) * self.var_grad[0][d] + (y[0] - self.mean[0]) * (1 - self.alpha * self.mean_grad[0][d]) * 2
         self.var_grad[1][d] = (1 - self.alpha) * self.var_grad[1][d] - (y[1] - self.mean[1]) * (1 - self.alpha * self.mean_grad[1][d]) * 2
@@ -78,9 +81,9 @@ class Model():
         self.dot_grad[d] = (1 - self.alpha) * self.dot_grad[d] + y[1] - y[0]
         # total grad
         mags = self.mag[0] * self.mag[1]
-        diff = (self.mag[0] * self.mag_grad[1] + self.mag[1] * self.mag_grad[0])
-        top = (2 * self.dot_grad * self.dot - self.var[0] * self.var_grad[1] - self.var[1] * self.var_grad[0]) * mags
-        top += (self.var[0] * self.var[1] - self.dot * self.dot) * diff
+        diff = self.mag[0] * self.mag_grad[1] + self.mag[1] * self.mag_grad[0]
+        top = (2 * self.dot_grad * self.dot * self.dotWeight - self.varWeight * (self.var[0] * self.var_grad[1] + self.var[1] * self.var_grad[0])) * mags
+        top += (self.var[0] * self.var[1] * self.varWeight - self.dot * self.dot * self.dotWeight) * diff
         self.total_grad += top / (mags * mags)
 
     def adam(self):
@@ -94,10 +97,10 @@ class Model():
         return a * self.m / (np.sqrt(self.v) + 1.e-6)
 
     def train(self, startP, startV, length, report_loss=True):
-        losses = np.empty(length - self.windowsize)
+        losses = np.empty((2, length - self.windowsize))
         #reset running averages
         self.mean = np.zeros(2)
-        self.mag = np.zeros(2)
+        self.mag = np.zeros(2) + 1e-6
         self.var = np.zeros(2)
         self.dot = 0
         self.resetGrads()
@@ -122,30 +125,31 @@ class Model():
             self.var = (1 - self.alpha) * self.var + self.alpha * error * error
             self.dot = (1 - self.alpha) * self.dot + self.alpha * y[0] * y[1]
             if report_loss:
-                losses[t] = (self.dot * self.dot - self.var[0] * self.var[1]) / (self.mag[0] * self.mag[1])
+                losses[0][t] = self.dot * self.dot / (self.mag[0] * self.mag[1])
+                losses[1][t] = -self.var[0] * self.var[1] / (self.mag[0] * self.mag[1])
             #updating gradients
             self.updateGrads(input, start, y)
             #stepping one step forward
             input[start] = piano[startP + t + self.windowsize] + violin[startV + t + self.windowsize]
             input[start + self.windowsize] = input[start] * input[start]
             start = (start + 1) % self.windowsize
-        self.weights -= self.adam()
+        self.weights -= self.adam() / (length - self.windowsize)
         return losses
 
     #for running a trained network
     def forward(self, startP, startV, length):
-        out = np.empty((length - self.windowsize, 2))
+        out = np.empty((2, length - self.windowsize))
         input = np.empty(2*self.windowsize)
         start = 0
         for i in range(self.windowsize):
             input[i] = piano[startP + i] + violin[startV + i]
             input[i+self.windowsize] = input[i] * input[i]
-        for j in range(len(out)):
-            out[j][0] = self.weights[2*self.windowsize] #add bias first
+        for j in range(len(out[0])):
+            out[0][j] = self.weights[2*self.windowsize] #add bias first
             for i in range(self.windowsize):
-                out[j][0] += self.weights[i] * input[(start + i) % self.windowsize] #linear terms
-                out[j][0] += self.weights[i + self.windowsize] * input[(start + i) % self.windowsize + self.windowsize] #quadratic terms
-            out[j][1] = input[(start + self.windowsize // 2) % self.windowsize] - out[j][0]
+                out[0][j] += self.weights[i] * input[(start + i) % self.windowsize] #linear terms
+                out[0][j] += self.weights[i + self.windowsize] * input[(start + i) % self.windowsize + self.windowsize] #quadratic terms
+            out[1][j] = input[(start + self.windowsize // 2) % self.windowsize] - out[0][j]
             input[start] = piano[startP + j + self.windowsize] + violin[startV + j + self.windowsize]
             input[start + self.windowsize] = input[start] * input[start]
             start = (start + 1) % self.windowsize
@@ -161,7 +165,7 @@ class Model():
             input[i+self.windowsize] = input[i] * input[i]
         out = np.empty(2)
         mean = np.zeros(2)
-        mag = np.zeros(2)
+        mag = np.zeros(2) + 1e-6
         var = np.zeros(2)
         dot = 0
         for j in range(len(losses)):
@@ -180,17 +184,78 @@ class Model():
             input[start] = piano[startP + j + self.windowsize] + violin[startV + j + self.windowsize]
             input[start + self.windowsize] = input[start] * input[start]
             start = (start + 1) % self.windowsize
-        return losses
+            return losses
 
-model = Model(1024, lr=10)
-rep = 120
-length = model.windowsize + 1000
-mean_loss = np.empty(rep)
-for i in range(rep):
-    print(i)
-    p = np.random.randint(0, len(piano) - length)
-    v = np.random.randint(0, len(violin) - length)
-    losses = model.train(p, v, length)
-    mean_loss[i] = sum(losses) / len(losses)
-plt.plot(mean_loss)
-plt.show()
+#for debugging
+np.random.seed(50937)
+
+def arrToDict(arr):
+    out = {}
+    for e in arr:
+        if e[2] == 'int':
+            out[e[0]] = int(e[1])
+        elif e[2] == 'float':
+            out[e[0]] = float(e[1])
+    return out
+
+if __name__ == "__main__":
+    reused = False
+    if reused:
+        with open('models/data2.npy', 'rb') as f:
+            weights = np.load(f)
+            startLosses = np.load(f)
+            params = np.load(f)
+            m = np.load(f)
+            v = np.load(f)
+        params = arrToDict(params)
+        model = Model(windowsize=params['windowsize'], alpha=params['alpha'], lr=params['lr'],
+                      dotWeight=params['dotWeight'], b1=params['b1'], b2=params['b2'])
+        model.b1t = params['b1t']
+        model.b2t = params['b2t']
+        model.m = m
+        model.v = v
+        model.weights = weights
+        length = params['length']
+    else:
+        model = Model(128, lr=0.2, dotWeight=0.5)
+        length = model.windowsize + 4096
+
+    rep = 500
+    total_losses = np.empty((rep, 2, length - model.windowsize))
+    for i in range(rep):
+        print('step', i + 1, 'of', rep)
+        p = np.random.randint(0, len(piano) - length)
+        v = np.random.randint(0, len(violin) - length)
+        losses = model.train(p, v, length)
+        dotloss = sum(losses[0]) / len(losses[0])
+        varloss = sum(losses[1]) / len(losses[1])
+        print('   mean losses (var, dot, total)', varloss, dotloss, dotloss + varloss)
+        total_losses[i] = losses
+
+    if reused:
+        total_losses = np.append(startLosses, total_losses, axis=0)
+        rep += params['rep']
+
+    folder = 'models'
+    if not os.path.exists(folder):
+        os.makedirs(folder)
+
+    modelNr = 0
+    if os.path.exists(folder + '/modelNr.txt'):
+        with open(folder + '/modelNr.txt', 'r') as f:
+            modelNr = int(f.read())
+
+    params = np.array([('windowsize', model.windowsize, 'int'), ('alpha', model.alpha, 'float'),
+                       ('lr', model.lr, 'float'), ('b1', model.b1, 'float'), ('b2', model.b2, 'float'),
+                       ('rep', rep, 'int'), ('length', length, 'int'), ('dotWeight', model.dotWeight, 'float'),
+                       ('ampl', ampl, 'int'), ('b1t', model.b1t, 'float'), ('b2t', model.b2t, 'float')])
+
+    with open(folder + '/data' + str(modelNr) + '.npy', 'wb') as f:
+        np.save(f, model.weights)
+        np.save(f, total_losses)
+        np.save(f, params)
+        np.save(f, model.m)
+        np.save(f, model.v)
+
+    with open(folder + '/modelNr.txt', 'w') as f:
+        f.write(str(modelNr + 1))
