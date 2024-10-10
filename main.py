@@ -1,5 +1,4 @@
 import numpy as np
-from scipy.io.wavfile import read
 import os
 
 #65536 = 2 ^16, so the maximal possible value, so clamping it between 0 and 1
@@ -10,6 +9,7 @@ ampl = 100
 with open('music/music.npy', 'rb') as f:
     piano = np.load(f)
     violin = np.load(f)
+    barsize = np.load(f)
 
 
 class Model():
@@ -19,7 +19,7 @@ class Model():
         self.alpha = alpha
 
         self.dotWeight = dotWeight
-        self.varWeight = self.dotWeight
+        self.varWeight = 1 - self.dotWeight
 
         #parameters for adam
         self.lr = lr
@@ -115,8 +115,9 @@ class Model():
             y = np.empty(2)
             y[0] = self.weights[2 * self.windowsize]  # add bias first
             for i in range(self.windowsize):
-                y[0] += self.weights[i] * input[(start + i) % self.windowsize]  # linear terms
-                y[0] += self.weights[i + self.windowsize] * input[(start + i) % self.windowsize + self.windowsize]  # quadratic terms
+                j = (start + i) % self.windowsize
+                y[0] += self.weights[i] * input[j]  # linear terms
+                y[0] += self.weights[i + self.windowsize] * input[j + self.windowsize]  # quadratic terms
             y[1] = input[(start + self.windowsize // 2) % self.windowsize] - y[0]
             #updating running means and gradients
             self.mean = (1 - self.alpha) * self.mean + self.alpha * y
@@ -187,7 +188,7 @@ class Model():
             return losses
 
 #for debugging
-np.random.seed(50937)
+#np.random.seed(50937)
 
 def arrToDict(arr):
     out = {}
@@ -199,9 +200,9 @@ def arrToDict(arr):
     return out
 
 if __name__ == "__main__":
-    reused = False
+    reused = True
     if reused:
-        with open('models/data2.npy', 'rb') as f:
+        with open('models/unaligned.npy', 'rb') as f:
             weights = np.load(f)
             startLosses = np.load(f)
             params = np.load(f)
@@ -220,12 +221,12 @@ if __name__ == "__main__":
         model = Model(128, lr=0.2, dotWeight=0.5)
         length = model.windowsize + 4096
 
-    rep = 500
+    rep = 1500
     total_losses = np.empty((rep, 2, length - model.windowsize))
     for i in range(rep):
         print('step', i + 1, 'of', rep)
-        p = np.random.randint(0, len(piano) - length)
-        v = np.random.randint(0, len(violin) - length)
+        p = np.random.randint(0, (len(piano) - length) // barsize) * barsize
+        v = np.random.randint(0, (len(violin) - length) // barsize) * barsize
         losses = model.train(p, v, length)
         dotloss = sum(losses[0]) / len(losses[0])
         varloss = sum(losses[1]) / len(losses[1])

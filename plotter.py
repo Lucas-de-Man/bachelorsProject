@@ -1,7 +1,8 @@
 import numpy as np
 import matplotlib.pyplot as plt
-from scipy.io.wavfile import read, write
+import wave
 from main import Model
+import os
 
 def arrToDict(arr):
     out = {}
@@ -14,7 +15,7 @@ def arrToDict(arr):
 
 print('plotting...')
 
-with open('models/data5.npy', 'rb') as f:
+with open('models/baseline18.npy', 'rb') as f:
     weights = np.load(f)
     losses = np.load(f)
     params = np.load(f)
@@ -25,30 +26,76 @@ model = Model(windowsize=params['windowsize'], alpha=params['alpha'], lr=params[
 
 model.weights = weights
 
-ampl = params['ampl']
+
 with open('music/music.npy', 'rb') as f:
     PIANO = np.load(f)
     VIOLIN = np.load(f)
+    barsize = np.load(f)
 
 def makeWavs(start=10, width=100):
     print("making wavs")
 
+    if not os.path.exists('out'):
+        os.makedirs('out')
+
     out = model.forward(start, start, width)
 
-    c0 = out[0] * 65536
-    c1 = out[1] * 65536
+    c0 = out[0]
+    c1 = out[1]
 
-    p = PIANO[start + model.windowsize // 2:start + width - model.windowsize // 2] * 65536
-    v = VIOLIN[start + model.windowsize // 2:start + width - model.windowsize // 2] * 65536
+    c0 -= min(c0)
+    c1 -= min(c1)
+    c0 *= 2147483647. / max(c0)
+    c1 *= 2147483647. / max(c1)
+    c0 = c0.astype(int)
+    c1 = c1.astype(int)
+
+    p = PIANO[start + model.windowsize // 2:start + width - model.windowsize // 2]
+    v = VIOLIN[start + model.windowsize // 2:start + width - model.windowsize // 2]
 
     used_input = p + v
 
-    write("out/piano.wav", rate=8192, data=p.astype(np.int16))
-    write("out/violin.wav", rate=8192, data=v.astype(np.int16))
-    write("out/sum.wav", rate=8192, data=used_input.astype(np.int16))
+    used_input -= min(used_input)
+    used_input *= 2147483647. / max(used_input)
+    used_input = used_input.astype(int)
 
-    write("out/chanel0.wav", rate=8192, data=c0.astype(np.int16))
-    write("out/chanel1.wav", rate=8192, data=c1.astype(np.int16))
+    p -= min(p)
+    v -= min(v)
+    p *= 2147483647. / max(p)
+    v *= 2147483647. / max(v)
+    p = p.astype(int)
+    v = v.astype(int)
+
+    with wave.open("out/piano.wav", mode='wb') as f:
+        f.setnchannels(1)
+        f.setsampwidth(4)
+        # 4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+        f.setframerate(8192)
+        f.writeframes(bytes(p))
+    with wave.open("out/violin.wav", mode='wb') as f:
+        f.setnchannels(1)
+        f.setsampwidth(4)
+        # 4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+        f.setframerate(8192)
+        f.writeframes(bytes(v))
+    with wave.open("out/sum.wav", mode='wb') as f:
+        f.setnchannels(1)
+        f.setsampwidth(4)
+        # 4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+        f.setframerate(8192)
+        f.writeframes(bytes(used_input))
+    with wave.open("out/chanel0.wav", mode='wb') as f:
+        f.setnchannels(1)
+        f.setsampwidth(4)
+        # 4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+        f.setframerate(8192)
+        f.writeframes(bytes(c0))
+    with wave.open("out/chanel1.wav", mode='wb') as f:
+        f.setnchannels(1)
+        f.setsampwidth(4)
+        # 4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+        f.setframerate(8192)
+        f.writeframes(bytes(c1))
 
 #plot should be an array of size 3
 def alphaSpeed(plot, alpha=0.1, width=2, start=10):
@@ -185,9 +232,132 @@ def plotChanels(startv=0, startp=0, width = 2024):
     axs[1][2].plot(VIOLIN[startv:startv + width] + PIANO[startp:startp + width])
     plt.show()
 
+def chanelsPlot(startv=0, startp=0, width=128):
+    out = model.forward(startp, startv, width + model.windowsize)
+    plt.plot(out[0], label='chanel 0')
+    plt.plot(out[1], label='chanel 1')
+    plt.legend()
+    plt.title('chanel 0 and chanel 1')
+    plt.xlabel('t')
+    plt.show()
+
+def dataDot(rep=100, length=4096):
+    final = 0
+    for _ in range(rep):
+        startP = np.random.randint(0, (len(PIANO) - length) // barsize) * barsize
+        startV = np.random.randint(0, (len(VIOLIN) - length) // barsize) * barsize
+        dot = 0
+        piaMag = 0
+        vioMag = 0
+        for i in range(length):
+            dot += PIANO[startP+i] * VIOLIN[startV+i]
+            piaMag += PIANO[startP+i] ** 2
+            vioMag += VIOLIN[startV+i] ** 2
+        final += dot * dot / (piaMag * vioMag)
+    return final / rep
+
+def scoreModel(rep=10, length=4096):
+    score = 0
+    for i in range(rep):
+        startP = np.random.randint(0, (len(PIANO) - length - model.windowsize) // barsize) * barsize
+        startV = np.random.randint(0, (len(VIOLIN) - length - model.windowsize) // barsize) * barsize
+        out = model.forward(startP, startV, length + model.windowsize)
+        outMag = [sum(out[0] ** 2), sum(out[1] ** 2)]
+        pianoMag = sum(PIANO[startP:startP+length] ** 2)
+        violinMag = sum(VIOLIN[startV:startV + length] ** 2)
+        score0 = sum(out[0] * PIANO[startP:startP+length]) ** 2 / (outMag[0] * pianoMag)
+        score0 += sum(out[1] * VIOLIN[startV:startV+length]) ** 2 / (outMag[1] * violinMag)
+        score1 = sum(out[1] * PIANO[startP:startP + length]) ** 2 / (outMag[1] * pianoMag)
+        score1 += sum(out[0] * VIOLIN[startV:startV + length]) ** 2 / (outMag[0] * violinMag)
+        score += min(score0, score1)
+        if i % (rep // 5) == 0:
+            print(i, '/', rep)
+    return score / rep
+
+def intensity(data, alpha=0.05):
+    intens = 0
+    intensity = np.empty(len(data))
+    for i in range(len(data)):
+        intens = alpha*(data[i] ** 2) + (1-alpha) * intens
+        intensity[i] = intens
+    return intensity
+
+def spectogram(data, sliceWidth=1000, plot=plt):
+    specto = np.empty((len(data) - sliceWidth, sliceWidth // 2))
+    subset = np.empty(sliceWidth)
+    for i in range(len(specto)):
+        for j in range(sliceWidth):
+            subset[j] = data[i+j]
+        specto[i] = np.abs(np.fft.fft(subset))[:sliceWidth // 2]
+    specto = np.rot90(specto)
+    plot.imshow(specto)
+    for i in range(1, 1 + (len(data) - sliceWidth) // barsize):
+        plot.vlines(i * barsize - sliceWidth, 0, sliceWidth // 2, colors='green')
+        plot.vlines(i * barsize, 0, sliceWidth // 2, colors='red')
+    if plot == plt:
+        plot.show()
+
+def slope(data, N=99):
+    slopes = np.zeros(len(data))
+    xy = 0
+    sy = 0
+    x = N*(N+1) // 2
+    under = (N+1)*(N+2)*(2*N+3) // 6 * N - x * x
+    for i in range(N):
+        sy += data[i]
+        xy += i * data[i]
+    for i in range(N, len(data)):
+        sy += data[i]
+        xy += N * data[i]
+        slopes[i - N // 2] = ((N+1) * xy - x*sy) / under
+        sy -= data[i - N]
+        xy -= sy
+    return slopes
+
+def intensityTest():
+    width = 5000
+    start = barsize * 17
+    data = VIOLIN[start:start + width]
+    data += PIANO[start:start + width]
+    fig, axs = plt.subplots(2, 3)
+    intens = intensity(data=data, alpha=0.025)
+    axs[0][0].plot(data)
+    axs[0][1].plot(intens)
+    slope2 = slope(intens) ** 2
+    axs[0][1].plot(slope2 * max(intens) / max(slope2))
+    for i in range(1, 1 + width // barsize):
+        axs[0][1].vlines(i * barsize, min(intens), max(intens), colors='red')
+
+    spectogram(data, plot=axs[0][2], sliceWidth=200)
+
+    spectogram(VIOLIN[start:start + width], plot=axs[1][0], sliceWidth=200)
+    spectogram(PIANO[start:start + width], plot=axs[1][1], sliceWidth=200)
+
+    plt.show()
+
+#chanelsPlot()
+
 #plotAlphaScores(plt, 400, 75, params[6])
-#plotMeanlosses(200)
+#plotMeanlosses(50)
 
-makeWavs(8000, 100000)
 
-#plotChanels(startv=8000, startp=8000, width=128*2)
+
+
+
+#spectogram(VIOLIN[0:barsize*8])
+
+#print(scoreModel(rep=100))
+
+#makeWavs(8000, 100000)
+
+plotChanels(startv=0, startp=0, width=1028 + model.windowsize)
+
+#print(dataDot())
+
+#model-data dot
+#0.10238340859489785 (aligned)
+#0.06364016318678055 (unaligned)
+
+#original data dot
+#0.0006275056974094232 (unaligned)
+#0.009679177712664539 (aligned)

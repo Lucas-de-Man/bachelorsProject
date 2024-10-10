@@ -55,7 +55,7 @@ piano = np.append(piano, piano, axis=1)"""
 
 notes = np.zeros((7, 4096))  # 2 * 16 * 128
 fingerprint = [0.5, 0.25, 0.125, 0, 0.125, 0.25, 1]
-nF = 1
+nF = 1.1
 for n in range(7):
     fac = (nF * 1.0905077326653 - nF) * 128
     for fp in range(len(fingerprint)):
@@ -83,34 +83,61 @@ violinSong = np.empty(50 * violin.shape[1])
 
 print(pianoSong.shape, violinSong.shape)
 
-for i in range(0, len(pianoSong), piano.shape[1]):
+i = 0
+while i < len(pianoSong):
     k = np.random.randint(0, 7)
-    for j in range(len(piano[k])):
+    l = np.random.randint(1, 5) #1, 2, 3, 4
+    if i + len(piano[k]) * l // 4 >= len(pianoSong):
+        l = (len(pianoSong) - i) / len(piano[k]) * 4
+    for j in range(int(len(piano[k]) * l // 4)):
         pianoSong[i + j] = piano[k][j]
+    i += piano.shape[1] * l // 4
 
-for i in range(0, len(violinSong), len(violin[0])):
+i = 0
+while i < len(violinSong):
     k = np.random.randint(0, 7)
-    for j in range(len(violin[k])):
+    l = np.random.randint(1, 5) #1, 2, 3, 4
+    if i + len(violin[k]) * l // 4 >= len(violinSong):
+        l = (len(violinSong) - i) / len(violin[k]) * 4
+    for j in range(int(len(violin[k]) * l // 4)):
         violinSong[i + j] = violin[k][j]
+    i += violin.shape[1] * l // 4
 
 
 with open('music/music.npy', 'wb') as f:
     np.save(f, pianoSong)
     np.save(f, violinSong)
+    np.save(f, len(violin[0]) // 2)
 
 
-
+sumSong = pianoSong + violinSong
 pianoSong -= min(pianoSong)
 violinSong -= min(violinSong)
+sumSong -= min(sumSong)
 pianoSong *= 2147483647. / max(pianoSong)
 violinSong *= 2147483647. / max(violinSong)
+sumSong *= 2147483647. / max(sumSong)
 pianoSong = pianoSong.astype(int)
 violinSong = violinSong.astype(int)
+sumSong = sumSong.astype(int)
 
-with wave.open("out.wav", mode='wb') as f:
+with wave.open("violin.wav", mode='wb') as f:
     f.setnchannels(1)
     f.setsampwidth(4)
     #4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
     f.setframerate(8192)
     f.writeframes(bytes(violinSong))
 
+with wave.open("piano.wav", mode='wb') as f:
+    f.setnchannels(1)
+    f.setsampwidth(4)
+    #4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+    f.setframerate(8192)
+    f.writeframes(bytes(pianoSong))
+
+with wave.open("sum.wav", mode='wb') as f:
+    f.setnchannels(1)
+    f.setsampwidth(4)
+    #4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
+    f.setframerate(8192)
+    f.writeframes(bytes(sumSong))
