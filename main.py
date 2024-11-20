@@ -139,22 +139,32 @@ class Model():
 
     #for running a trained network
     def forward(self, startP, startV, length):
-        out = np.empty((2, length - self.windowsize))
-        input = np.empty(2*self.windowsize)
-        start = 0
+        inputsMat = np.empty((length - self.windowsize, 2*self.windowsize + 1))
+            #first line of inputs
+        #bias
+        inputsMat[0][2*self.windowsize] = 1
+        #rest
         for i in range(self.windowsize):
-            input[i] = piano[startP + i] + violin[startV + i]
-            input[i+self.windowsize] = input[i] * input[i]
-        for j in range(len(out[0])):
-            out[0][j] = self.weights[2*self.windowsize] #add bias first
-            for i in range(self.windowsize):
-                out[0][j] += self.weights[i] * input[(start + i) % self.windowsize] #linear terms
-                out[0][j] += self.weights[i + self.windowsize] * input[(start + i) % self.windowsize + self.windowsize] #quadratic terms
-            out[1][j] = input[(start + self.windowsize // 2) % self.windowsize] - out[0][j]
-            input[start] = piano[startP + j + self.windowsize] + violin[startV + j + self.windowsize]
-            input[start + self.windowsize] = input[start] * input[start]
-            start = (start + 1) % self.windowsize
-        return out
+            inputsMat[0][i] = piano[startP + i] + violin[startV + i]
+            inputsMat[0][i + self.windowsize] = inputsMat[0][i] * inputsMat[0][i]
+
+            #rest of the lines
+        for i in range(1, length - self.windowsize):
+            #bias
+            inputsMat[i][2 * self.windowsize] = 1
+            #shift first values
+            for j in range(self.windowsize - 1):
+                inputsMat[i][j] = inputsMat[i - 1][j + 1]
+                inputsMat[i][j + self.windowsize] = inputsMat[i - 1][j + self.windowsize + 1]
+            #new values
+            inputsMat[i][self.windowsize - 1] = piano[startP + self.windowsize + i] + violin[startV + self.windowsize + i]
+            inputsMat[i][2*self.windowsize - 1] = inputsMat[i][self.windowsize - 1] * inputsMat[i][self.windowsize - 1]
+
+        #input matrix is constructed so compute output
+        total = piano[startP + self.windowsize // 2 : startP + length + self.windowsize // 2 - self.windowsize]
+        total += violin[startV + self.windowsize // 2 : startV + length + self.windowsize // 2 - self.windowsize]
+        pianoOut = np.dot(inputsMat, self.weights)
+        return pianoOut, (total - pianoOut)
 
     #evaluating the current network
     def losses(self, startP, startV, length):

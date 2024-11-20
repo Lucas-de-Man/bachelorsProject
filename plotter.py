@@ -15,17 +15,19 @@ def arrToDict(arr):
 
 print('plotting...')
 
-with open('models/baseline18.npy', 'rb') as f:
+with open('models/baseline/baseline15.npy', 'rb') as f:
     weights = np.load(f)
-    losses = np.load(f)
-    params = np.load(f)
+    windowsize = np.load(f)
+    #losses = np.load(f)
+    #params = np.load(f)
 
-params = arrToDict(params)
-model = Model(windowsize=params['windowsize'], alpha=params['alpha'], lr=params['lr'],
-            dotWeight=params['dotWeight'], b1=params['b1'], b2=params['b2'])
+print(windowsize)
 
+#params = arrToDict(params)
+#model = Model(windowsize=params['windowsize'], alpha=params['alpha'], lr=params['lr'],
+#            dotWeight=params['dotWeight'], b1=params['b1'], b2=params['b2'])
+model = Model(windowsize=windowsize)
 model.weights = weights
-
 
 with open('music/music.npy', 'rb') as f:
     PIANO = np.load(f)
@@ -218,14 +220,14 @@ def plotMeanlosses(window=1):
     axs[1].plot(running_average(dotlosses, window))
     plt.show()
 
-def plotChanels(startv=0, startp=0, width = 2024):
+def plotChanels(start=0, width = 2024):
     fig, axs = plt.subplots(2, 3)
-    out = model.forward(startp, startv, width)
+    out = model.forward(start, start, width)
     axs[0][0].plot(out[0])
     axs[0][1].plot(out[1])
     axs[0][2].plot(out[0] + out[1])
-    startp = startp + model.windowsize // 2
-    startv = startv + model.windowsize // 2
+    startp = start + model.windowsize // 2
+    startv = start + model.windowsize // 2
     width -= model.windowsize
     axs[1][0].plot(PIANO[startp:startp + width])
     axs[1][1].plot(VIOLIN[startv:startv + width])
@@ -348,9 +350,9 @@ def intensityTest():
 
 #print(scoreModel(rep=100))
 
-#makeWavs(8000, 100000)
+makeWavs(100, 100000)
 
-plotChanels(startv=0, startp=0, width=1028 + model.windowsize)
+plotChanels(start=100, width=1024 + model.windowsize)
 
 #print(dataDot())
 

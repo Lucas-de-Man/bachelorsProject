@@ -78,37 +78,36 @@ violin = np.append(violin, violin, axis=1)"""
 
 #making music
 
-pianoSong = np.empty(50 * piano.shape[1])
-violinSong = np.empty(50 * violin.shape[1])
+#only going up, starting over when we hit the higest
+pianoMelody = [0, 1, 2, 3, 4, 5, 6] #7
+#going down but slower, skipping the last 0 to make an offset
+violinMelody = [6, 6, 6, 5, 5, 5, 4, 4, 4, 3, 3, 3, 2, 2, 2, 1, 1, 1, 0, 0] #20
+
+pianoSong = np.empty(len(pianoMelody) * len(violinMelody) * piano.shape[1])
+violinSong = np.empty(len(pianoMelody) * len(violinMelody) * violin.shape[1])
 
 print(pianoSong.shape, violinSong.shape)
 
-i = 0
-while i < len(pianoSong):
-    k = np.random.randint(0, 7)
-    l = np.random.randint(1, 5) #1, 2, 3, 4
-    if i + len(piano[k]) * l // 4 >= len(pianoSong):
-        l = (len(pianoSong) - i) / len(piano[k]) * 4
-    for j in range(int(len(piano[k]) * l // 4)):
-        pianoSong[i + j] = piano[k][j]
-    i += piano.shape[1] * l // 4
-
-i = 0
-while i < len(violinSong):
-    k = np.random.randint(0, 7)
-    l = np.random.randint(1, 5) #1, 2, 3, 4
-    if i + len(violin[k]) * l // 4 >= len(violinSong):
-        l = (len(violinSong) - i) / len(violin[k]) * 4
-    for j in range(int(len(violin[k]) * l // 4)):
-        violinSong[i + j] = violin[k][j]
-    i += violin.shape[1] * l // 4
-
+for i in range(len(pianoMelody) * len(violinMelody)):
+    for j in range(piano.shape[1]):
+        pianoSong[i * piano.shape[1] + j] = piano[pianoMelody[i % len(pianoMelody)]][j]
+        violinSong[i * piano.shape[1] + j] = violin[violinMelody[i % len(violinMelody)]][j]
 
 with open('music/music.npy', 'wb') as f:
     np.save(f, pianoSong)
     np.save(f, violinSong)
-    np.save(f, len(violin[0]) // 2)
+    #np.save(f, len(violin[0]) // 2)
+    np.save(f, piano.shape[1])
 
+'''
+with open('music/c++Music.txt', 'w') as f:
+    f.write(str(len(pianoSong)) + ' ')
+    for i in range(len(pianoSong)):
+        f.write(str(pianoSong[i]) + ' ')
+    for i in range(len(violinSong)):
+        f.write(str(violinSong[i]) + ' ')
+    f.write(str(piano.shape[1]) + ' ')
+'''
 
 sumSong = pianoSong + violinSong
 pianoSong -= min(pianoSong)
