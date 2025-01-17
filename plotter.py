@@ -15,7 +15,7 @@ def arrToDict(arr):
 
 print('plotting...')
 
-with open('models/baseline/baseline15.npy', 'rb') as f:
+with open('models/baseline/baseline4.npy', 'rb') as f:
     weights = np.load(f)
     windowsize = np.load(f)
     #losses = np.load(f)
@@ -33,6 +33,8 @@ with open('music/music.npy', 'rb') as f:
     PIANO = np.load(f)
     VIOLIN = np.load(f)
     barsize = np.load(f)
+
+
 
 def makeWavs(start=10, width=100):
     print("making wavs")
@@ -98,6 +100,8 @@ def makeWavs(start=10, width=100):
         # 4096, 128 = 65.4 Hz, so 128/65.4=1.957 sec. 4096/1.957=2093 frames/sec
         f.setframerate(8192)
         f.writeframes(bytes(c1))
+
+    print("made wavs")
 
 #plot should be an array of size 3
 def alphaSpeed(plot, alpha=0.1, width=2, start=10):
@@ -342,17 +346,15 @@ def intensityTest():
 #plotAlphaScores(plt, 400, 75, params[6])
 #plotMeanlosses(50)
 
-
-
-
+#intensityTest()
 
 #spectogram(VIOLIN[0:barsize*8])
 
 #print(scoreModel(rep=100))
 
-makeWavs(100, 100000)
+#makeWavs(100, 100000)
 
-plotChanels(start=100, width=1024 + model.windowsize)
+#plotChanels(start=10000, width=1024 + model.windowsize)
 
 #print(dataDot())
 
