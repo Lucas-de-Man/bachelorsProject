@@ -33,21 +33,21 @@ def loadModel(path):
 combination = piano + violin
 nrBars = len(piano) // barsize
 
-model = Grengar(windowsize=512, regSize=32)
-#model = loadModel("grengars/model-512-10000.npy")
+model = Grengar(windowsize=64, regSize=32, alphaMain=0.000001, magMult=10)
+#model = loadModel("grengars/model-64-1000.npy")
 
 
 #save start time
 startTime = time.time()
 
-steps = 10000
+steps = 7500
 for i in range(steps):
-    if (i % 50 == 0):
+    if (i % 100 == 0):
         print("step", i, "of", steps, "loss:")
         model.verbose = True
     #batchsize
-    start, end = startEnd(64)
-    model.step(combination[start:end])
+    start, end = startEnd(8)
+    model.step(combination[0:barsize])
     model.verbose = False
 
 #computed elapsed time
@@ -66,4 +66,3 @@ with open("grengars/model-" + str(model.windowsize) + '-' + str(steps) + ".npy",
     np.save(f, model.regBias0)
     np.save(f, model.regBias1)
     np.save(f, model.alphaReg)
-

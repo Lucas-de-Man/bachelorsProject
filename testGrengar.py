@@ -6,7 +6,7 @@ import os
 from regressionGrengar import solveLinearReg, Regression
 
 #setting up the loaded model
-with open('grengars/model-512-10000.npy', 'rb') as f:
+with open('grengars/veryGood.npy', 'rb') as f:
     windowsize = np.load(f)
     weights = np.load(f)
     bias = np.load(f)
@@ -20,8 +20,6 @@ with open('music/music.npy', 'rb') as f:
     piano = np.load(f)
     violin = np.load(f)
     barsize = np.load(f)
-
-
 
 def plotChanels(piano, violin):
     global model
@@ -126,4 +124,6 @@ def plotLossWindowsize(windowsizes=[8, 16, 32, 64], alpha=0.9):
 
 #plotLossWindowsize([8, 16, 32, 64, 128, 256], 0.8)
 
-plotChanels(piano[barsize:3*barsize], violin[barsize:3*barsize])
+plotChanels(piano[barsize:2*barsize], violin[barsize:2*barsize])
+
+#makeWavs(piano[0:2*barsize], violin[0:2*barsize])

@@ -184,7 +184,7 @@ def scoreAlpha(alpha=0.01, rep=3, width=2024):
             DOT += (running_dot ** 2 / (running_mag[0] * running_mag[1]) - true_dot) ** 2
     return VAR / (rep * width), DOT / (rep * width)
 
-def plotAlphaScores(plot, rep: int =128, r: int =32, width: int | float =2024):
+def plotAlphaScores(plot, rep: int =128, r: int =32, width: int | float = 2024):
     VARS = []
     DOTS = []
     #use range between [0.0001, 0.5], a * (b ** i), (0, 0.5), (r, 2^-10 = 0.0001), gives:
