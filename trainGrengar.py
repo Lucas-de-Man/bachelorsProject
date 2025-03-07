@@ -1,10 +1,12 @@
 from grengar import Grengar
 import numpy as np
 import time
+import pickle
 
-def startEnd(bars):
+def startEnd(bars, valProp=0.1):
     global nrBars
-    start = np.random.randint(0, nrBars - bars)
+    #np.ceil(nrBars * (1 - valProp)) makes sure we leave out enough for validation
+    start = np.random.randint(0, np.ceil(nrBars * (1 - valProp)) - bars)
     return start * barsize, (start + bars) * barsize
 
 with open('music/music.npy', 'rb') as f:
@@ -33,36 +35,27 @@ def loadModel(path):
 combination = piano + violin
 nrBars = len(piano) // barsize
 
-model = Grengar(windowsize=64, regSize=32, alphaMain=0.000001, magMult=10)
-#model = loadModel("grengars/model-64-1000.npy")
-
+#model = Grengar(windowsize=128, regSize=32, alphaMain=0.00000000001, alphaReg=0.00001, energyMult=50)
+with open("grengars/model-128-1500.obj", 'rb') as f:
+    model = pickle.load(f)
 
 #save start time
 startTime = time.time()
 
-steps = 7500
+steps = 1500
 for i in range(steps):
-    if (i % 100 == 0):
-        print("step", i, "of", steps, "loss:")
+    if (i % 10 == 1):
+        reglosses, energy = model.losses()
+        print("step", i, "of", steps, "reg0:", np.mean(reglosses[0][-50:]), "reg1:", np.mean(reglosses[1][-50:]),
+                                               "energy:", np.mean(energy[-50:]))
         model.verbose = True
     #batchsize
     start, end = startEnd(8)
-    model.step(combination[0:barsize])
+    model.batch(combination[0:barsize])
     model.verbose = False
 
 #computed elapsed time
 elapsed = time.time() - startTime
 print("took", elapsed // 60, "minutes and", elapsed % 60, "seconds to train.")
 
-with open("grengars/model-" + str(model.windowsize) + '-' + str(steps) + ".npy", 'wb') as f:
-    np.save(f, model.windowsize)
-    np.save(f, model.mainWeights)
-    np.save(f, model.mainBias)
-    np.save(f, model.alphaMain)
-    # regression
-    np.save(f, model.regSize)
-    np.save(f, model.regWeights0)
-    np.save(f, model.regWeights1)
-    np.save(f, model.regBias0)
-    np.save(f, model.regBias1)
-    np.save(f, model.alphaReg)
+model.save()

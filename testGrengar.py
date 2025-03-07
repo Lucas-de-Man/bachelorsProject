@@ -4,16 +4,11 @@ import matplotlib.pyplot as plt
 import wave
 import os
 from regressionGrengar import solveLinearReg, Regression
+import pickle
 
 #setting up the loaded model
-with open('grengars/veryGood.npy', 'rb') as f:
-    windowsize = np.load(f)
-    weights = np.load(f)
-    bias = np.load(f)
-
-model = Grengar(windowsize=windowsize)
-model.mainWeights = weights
-model.mainBias = bias
+with open('grengars/model-128-1500.obj', 'rb') as f:
+    model = pickle.load(f)
 
 #loading the data
 with open('music/music.npy', 'rb') as f:
@@ -29,8 +24,8 @@ def plotChanels(piano, violin):
     axs[0][0].plot(c0)
     axs[0][1].plot(c1)
     axs[0][2].plot(c0 + c1)
-    axs[1][0].plot(piano)
-    axs[1][1].plot(violin)
+    axs[1][0].plot(piano[model.windowsize // 2:-model.windowsize // 2])
+    axs[1][1].plot(violin[model.windowsize // 2:-model.windowsize // 2])
     axs[1][2].plot(together[model.windowsize // 2:-model.windowsize // 2])
     plt.show()
 
@@ -122,8 +117,32 @@ def plotLossWindowsize(windowsizes=[8, 16, 32, 64], alpha=0.9):
     plt.ylabel('MSE-loss')
     plt.show()
 
-#plotLossWindowsize([8, 16, 32, 64, 128, 256], 0.8)
+def plotLosses(skip=500):
+    global model
+    regLosses, orthLosses = model.losses()
+    x = [skip + i for i in range(len(regLosses[0]) - skip)]
 
-plotChanels(piano[barsize:2*barsize], violin[barsize:2*barsize])
+    regLosses = [np.array(regLosses[0][skip:]), np.array(regLosses[1][skip:])]
+    orthLosses = np.array(orthLosses[skip:])
+    total = -regLosses[0] * regLosses[1] + orthLosses
+
+    fig, ax = plt.subplots()
+
+    ax.set_xlabel('step')
+    ax.set_ylabel('loss')
+
+    ax.plot(x, regLosses[0], color='blue', label='regression c0')
+    ax.plot(x, regLosses[1], color='purple', label='regression c1')
+    #ax.plot(x, orthLosses, color='green', label='orthogonality')
+    #ax.plot(x, total, color='red', label='total')
+
+    ax.legend()
+    plt.show()
+
+#plotLossWindowsize([8, 16, 32, 64], 0.95)
+
+#plotChanels(piano[0:256], violin[0:256])
+
+#plotLosses(0)
 
 #makeWavs(piano[0:2*barsize], violin[0:2*barsize])

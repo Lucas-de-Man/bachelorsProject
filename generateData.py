@@ -93,6 +93,12 @@ for i in range(len(pianoMelody) * len(violinMelody)):
         pianoSong[i * piano.shape[1] + j] = piano[pianoMelody[i % len(pianoMelody)]][j]
         violinSong[i * piano.shape[1] + j] = violin[violinMelody[i % len(violinMelody)]][j]
 
+def meanEnergy(data):
+    return np.dot(data, data) / len(data)
+
+#make sure the mean energies of both signals are the same
+violinSong *= np.sqrt(meanEnergy(pianoSong) / meanEnergy(violinSong))
+
 with open('music/music.npy', 'wb') as f:
     np.save(f, pianoSong)
     np.save(f, violinSong)

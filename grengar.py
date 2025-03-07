@@ -1,23 +1,45 @@
 import numpy as np
+import pickle
 
 class Grengar:
-    def __init__(self, windowsize=256, regSize=64, alphaMain=0.005, magMult=1, alphaReg=0.01, orthAlpha=0.99, verbose=False):
+    def __init__(self, windowsize=128, regSize=32, alphaMain=0.000001, energyMult=10, alphaReg=0.001, energyAlpha=0.99, verbose=False):
         self.windowsize = windowsize
         self.regSize = regSize
         self.alphaMain = alphaMain
-        self.magMult = magMult
+        self.energyMult = energyMult
         self.alphaReg = alphaReg
         self.verbose = verbose
-        self.orthAlpha = orthAlpha
+        self.energyAlpha = energyAlpha
 
             #weigts
         #main weights have linear and quadratic components and a bias
         self.mainWeights = [np.random.normal(0, 1 / windowsize, windowsize) for _ in range(2)]
         self.mainBias = np.random.normal(0, 1 / windowsize)
+        #kept in reverse for convolutions
         self.regWeights0 = np.random.normal(0, 1 / regSize, regSize)
         self.regBias0 = np.random.normal(0, 1 / regSize)
         self.regWeights1 = np.random.normal(0, 15 / regSize, regSize)
         self.regBias1 = np.random.normal(0, 1 / regSize)
+
+            #equal energy grad
+        self.chanelEneries = [0, 0]
+        self.inputEnergy = 0
+        self.energyGrads0 = [np.zeros(windowsize) for _ in range(2)]
+        self.energyGrads1 = [np.zeros(windowsize) for _ in range(2)]
+        self.energyGradBias = [0, 0]
+
+        #keep track
+        self.reglosses = [[], []]
+        self.energyLoss = []
+
+    def save(self, path=""):
+        if path == "":
+            path = "grengars/model-" + str(self.windowsize) + '-' + str(len(self.energyLoss)) + ".obj"
+        with open(path, 'wb') as f:
+            pickle.dump(self, f)
+
+    def losses(self):
+        return self.reglosses, self.energyLoss
 
     def forward(self, input):
         if len(input) < self.windowsize:
@@ -32,87 +54,111 @@ class Grengar:
         chanel1 = input[self.windowsize // 2:-self.windowsize + self.windowsize // 2 + 1] - chanel0
         return chanel0, chanel1
 
-    def regGrad(self, chanel0, chanel1):
-        if len(chanel0) < self.regSize:
-            print("input needs to be bigger than or equal to the regression size")
-            return
-                                                                  #predict the middle value of the other chanel
-        diff0 = np.convolve(self.regWeights0, chanel0, 'valid') + self.regBias0 - chanel1[self.regSize // 2:-self.regSize + self.regSize // 2 + 1]
-        diff1 = np.convolve(self.regWeights1, chanel1, 'valid') + self.regBias1 - chanel0[self.regSize // 2:-self.regSize + self.regSize // 2 + 1]
-        #reverse to counteract future convolving
-        diff0 = diff0[::-1]
-        diff1 = diff1[::-1]
-        grad0 = np.convolve(diff0, chanel0, 'valid')
-        grad1 = np.convolve(diff1, chanel1, 'valid')
-        return grad0, grad1, diff0, diff1
+    def batch(self, input):
+        rl0 = []
+        rl1 = []
+        el  = []
+        for i in range(len(input) - self.windowsize - self.regSize + 1):
+            regloss0, regloss1, energyloss = self.step(input[i:i + self.windowsize + self.regSize - 1])
+            rl0.append(regloss0)
+            rl1.append(regloss1)
+            el.append(energyloss)
+        self.reglosses[0].append(np.mean(rl0))
+        self.reglosses[1].append(np.mean(rl1))
+        self.energyLoss.append(np.mean(el))
+        self.reset()
 
-    def orthGrad(self, input, inputSquare, chanel0, chanel1):
-        sqSum = chanel0 ** 2 + chanel1 ** 2
-        diff = chanel1 - chanel0
+    def reset(self):
+        self.chanelEneries = [0, 0]
+        self.inputEnergy = 0
+        self.energyGrads0 = [np.zeros(self.windowsize) for _ in range(2)]
+        self.energyGrads1 = [np.zeros(self.windowsize) for _ in range(2)]
+        self.energyGradBias = [0, 0]
 
-        linGrad = np.zeros(len(self.mainWeights[0]))
-        sqGrad  = np.zeros(len(self.mainWeights[1]))
-        biasGrad = 0
-        lastBias = 0
-        lastScaleLin = 0
-        lastScaleSq = 0
-        lastScaleBi = 0
-        for t in range(len(diff)):
-            lastCL = np.zeros(len(self.mainWeights[0]))
-            lastCS = np.zeros(len(self.mainWeights[0]))
-            lastScaleLin = self.orthAlpha * lastScaleLin + inputSquare[t] * sqSum[t]
-            lastScaleSq = self.orthAlpha * lastScaleSq + inputSquare[t] ** 2 * sqSum[t]
-            lastScaleBi = self.orthAlpha * lastScaleBi + sqSum[t]
-            lastBias = self.orthAlpha * lastBias + diff[t]
-            for j in range(len(self.mainWeights[0])):
-                lastCL[j] = self.orthAlpha * lastCL[j] + diff[t] * input[t + j]
-                lastCS[j] = self.orthAlpha * lastCS[j] + diff[t] * inputSquare[t + j]
-            linGrad += lastCL * lastScaleLin
-            sqGrad += lastCS * lastScaleSq
-            biasGrad += lastBias * lastScaleBi
-        return 2 * (1 - self.orthAlpha) ** 2 * linGrad, 2 * (1 - self.orthAlpha) ** 2 * sqGrad, 2 * (1 - self.orthAlpha) ** 2 * biasGrad
+    #x being length windowsize + regSize - 1
+    def step(self, x):
+        x2 = x * x
+        c0 = np.convolve(self.mainWeights[0], x, 'valid')
+        c0 += np.convolve(self.mainWeights[1], x2, 'valid') + self.mainBias
+        c1 = x[self.windowsize // 2:self.windowsize // 2 + self.regSize] - c0
+        y0 = np.convolve(self.regWeights0, c0, 'valid')[0]
+        y1 = np.convolve(self.regWeights1, c1, 'valid')[0]
+        #get gradients
+        linGrad, quaGrad, biasGrad = self.grangerGrad(x, x2, c0, y0, c1, y1)
+        lg, qg, bg, loss = self.energyGrad(x[:self.windowsize], x2[:self.windowsize], c0[0], c1[0])
+        linGrad += lg * self.energyMult
+        quaGrad += qg * self.energyMult
+        biasGrad += bg * self.energyMult
+        regGrad0, regGrad1, regBias0, regBias1, regLoss0, regLoss1 = self.regressionGrad(c0, y0, c1, y1)
+        #update grads
+        self.mainWeights[0] -= self.alphaMain * linGrad
+        self.mainWeights[1] -= self.alphaMain * quaGrad
+        self.mainBias       -= self.alphaMain * biasGrad
+        self.regWeights0    -= self.alphaReg * regGrad0
+        self.regBias0       -= self.alphaReg * regBias0
+        self.regWeights1    -= self.alphaReg * regGrad1
+        self.regBias1       -= self.alphaReg * regBias1
+        #save losses
+        return regLoss0, regLoss1, loss
 
+    #x being an np.array of length windowsize, x2 being its square
+    def energyGrad(self, x, x2, c0, c1):
+        #update energies
+        self.inputEnergy = self.energyAlpha * self.inputEnergy + x2[-1]
+        self.chanelEneries[0] = self.energyAlpha * self.chanelEneries[0] + c0 * c0
+        self.chanelEneries[1] = self.energyAlpha * self.chanelEneries[1] + c1 * c1
+        #update gradients
+            #linear
+        self.energyGrads0[0] = self.energyAlpha * self.energyGrads0[0] + c0 * x
+        self.energyGrads0[1] = self.energyAlpha * self.energyGrads0[1] + c1 * x
+            #quadratic
+        self.energyGrads1[0] = self.energyAlpha * self.energyGrads1[0] + c0 * x2
+        self.energyGrads1[1] = self.energyAlpha * self.energyGrads1[1] + c1 * x2
+            #bias
+        self.energyGradBias[0] = self.energyAlpha * self.energyGradBias[0] + c0
+        self.energyGradBias[1] = self.energyAlpha * self.energyGradBias[1] + c1
+        #return current gradient
+            #linear
+        gradLin = (2 * self.chanelEneries[0] - self.inputEnergy) * self.energyGrads0[0]
+        gradLin -= (2 * self.chanelEneries[1] - self.inputEnergy) * self.energyGrads0[1]
+        gradLin *= 1 - self.energyAlpha
+            #quadratic
+        gradQua = (2 * self.chanelEneries[0] - self.inputEnergy) * self.energyGrads1[0]
+        gradQua -= (2 * self.chanelEneries[1] - self.inputEnergy) * self.energyGrads1[1]
+        gradQua *= 1 - self.energyAlpha
+            #bias
+        gradBias = (2 * self.chanelEneries[0] - self.inputEnergy) * self.energyGradBias[0]
+        gradBias -= (2 * self.chanelEneries[1] - self.inputEnergy) * self.energyGradBias[1]
+        gradBias *= 1 - self.energyAlpha
+            #total loss
+        loss = (self.chanelEneries[0] - self.inputEnergy / 2) ** 2 + (self.chanelEneries[1] - self.inputEnergy / 2) ** 2
+        return gradLin, gradQua, gradBias, loss
 
-    def step(self, input):
-        chanel0, chanel1 = self.forward(input)
-        regGrad0, regGrad1, diff0, diff1 = self.regGrad(chanel0, chanel1)
-        inpSq = input ** 2
-        linGrad, sqGrad, biasGrad = self.orthGrad(input, inpSq, chanel0, chanel1)
-        #orthoganality
-        self.mainWeights[0] += linGrad / len(input) * self.alphaMain * self.magMult
-        self.mainWeights[1] += sqGrad / len(input) * self.alphaMain * self.magMult
-        self.mainBias += biasGrad / len(input) * self.alphaMain * self.magMult
-        #linear terms
-        mainGrad0 = np.convolve(self.regWeights0, input, 'valid')
-        mainGrad1 = np.convolve(self.regWeights1, input, 'valid')
-        alignedInput = input[self.regSize // 2:-self.regSize + self.regSize // 2 + 1]
-        mainGrad0 += alignedInput
-        mainGrad1 += alignedInput
-        self.mainWeights[0] += np.convolve(diff0, mainGrad0, 'valid')[::-1] / len(input) * self.alphaMain
-        self.mainWeights[0] -= np.convolve(diff1, mainGrad1, 'valid')[::-1] / len(input) * self.alphaMain
-        #quadratic terms
-        qmainGrad0 = np.convolve(self.regWeights0, inpSq, 'valid')
-        qmainGrad1 = np.convolve(self.regWeights1, inpSq, 'valid')
-        qalignedInput = inpSq[self.regSize // 2:-self.regSize + self.regSize // 2 + 1]
-        qmainGrad0 += qalignedInput
-        qmainGrad1 += qalignedInput
-        self.mainWeights[1] += np.convolve(diff0, qmainGrad0, 'valid')[::-1] / len(input) * self.alphaMain
-        self.mainWeights[1] -= np.convolve(diff1, qmainGrad1, 'valid')[::-1] / len(input) * self.alphaMain
-        #main bias
-        self.mainBias += sum(diff0) * (sum(self.regWeights0) + self.regBias0 + 1) / len(input) * self.alphaMain
-        self.mainBias -= sum(diff1) * (sum(self.regWeights1) + self.regBias1 + 1) / len(input) * self.alphaMain
-        # regressions
-        self.regWeights0 -= regGrad0[::-1] / len(input) * self.alphaReg
-        self.regWeights1 -= regGrad1[::-1] / len(input) * self.alphaReg
-        self.regBias0 -= sum(diff0) / len(input) * self.alphaReg
-        self.regBias1 -= sum(diff1) / len(input) * self.alphaReg
-        if self.verbose:
-            #print loss if verbose (MSE-ish)
-            sqDiff = inpSq[self.windowsize // 2:-self.windowsize + self.windowsize // 2 + 1] - chanel0 ** 2 - chanel1 ** 2
-            print("orth: ", sum(sqDiff) ** 2 / len(input))
-            print("rest: ", -sum(diff0**2 + diff1**2) / len(input))
-            print("orthGrad: ", sum(abs(linGrad) + abs(sqGrad)) / len(linGrad) * self.magMult)
-            mainSq = np.convolve(diff0, qmainGrad0, 'valid')[::-1] - np.convolve(diff1, qmainGrad1, 'valid')[::-1]
-            mainLin = np.convolve(diff0, mainGrad0, 'valid')[::-1] - np.convolve(diff1, mainGrad1, 'valid')[::-1]
-            print("restGrad: ", sum(abs(mainLin) + abs(mainSq)) / len(mainLin))
-            print("-------------------")
+    #c0 and c1 are both np.arrays of length regSize
+    #y0 is the prediction of c0, y1 is the prediction of c1
+    def regressionGrad(self, c0, y0, c1, y1):
+        targetIdx = self.regSize // 2
+        grad0 = (y0 - c1[targetIdx]) * c0
+        grad1 = (y1 - c0[targetIdx]) * c1
+        biasGrad0 = y0 - c1[targetIdx]
+        biasGrad1 = y1 - c0[targetIdx]
+        return grad0[::-1], grad1[::-1], biasGrad0, biasGrad1, biasGrad0 ** 2, biasGrad1 ** 2
+
+    #x is an np.array with size windowsize + regSize - 1, x2 is its square
+    def grangerGrad(self, x, x2, c0, y0, c1, y1):
+        xSub = x[self.regSize // 2:-self.regSize // 2 + 1]
+        x2Sub = x2[self.regSize // 2:-self.regSize // 2 + 1]
+            #linear
+        gradLin = (y0 - c0[self.regSize // 2]) * (
+                    np.convolve(x, self.regWeights0, 'valid') + xSub)
+        gradLin -= (y1 - c1[self.regSize // 2]) * (
+                    np.convolve(x, self.regWeights1, 'valid') + xSub)
+            #quadratic
+        gradQua = (y0 - c0[self.regSize // 2]) * (
+                np.convolve(x2, self.regWeights0, 'valid') + x2Sub)
+        gradQua -= (y1 - c1[self.regSize // 2]) * (
+                np.convolve(x2, self.regWeights1, 'valid') + x2Sub)
+            #bias
+        gradBias = (y0 - c0[self.regSize // 2]) * (sum(self.regWeights0) + 1)
+        gradBias -= (y1 - c1[self.regSize // 2]) * (sum(self.regWeights1) + 1)
+        return gradLin, gradQua, gradBias
