@@ -2,7 +2,7 @@ import numpy as np
 import pickle
 
 class Grengar:
-    def __init__(self, windowsize=128, regSize=32, alphaMain=0.000001, energyMult=10, alphaReg=0.001, energyAlpha=0.99, verbose=False):
+    def __init__(self, windowsize=128, regSize=32, alphaMain=0.000001, energyMult=10, alphaReg=0.001, energyAlpha=0.9999, beta1=0.99, beta2=0.9999, batchSaveRate=1, verbose=False):
         self.windowsize = windowsize
         self.regSize = regSize
         self.alphaMain = alphaMain
@@ -28,9 +28,22 @@ class Grengar:
         self.energyGrads1 = [np.zeros(windowsize) for _ in range(2)]
         self.energyGradBias = [0, 0]
 
+            #adam
+        self.beta1 = beta1
+        self.firstMoment = [np.zeros(self.windowsize) for _ in range(2)]
+        self.firstMomBias = 0
+        self.beta2 = beta2
+        self.secondMoment = [np.zeros(self.windowsize) for _ in range(2)]
+        self.secondMomBias = 0
+
         #keep track
-        self.reglosses = [[], []]
-        self.energyLoss = []
+        self.reglosses = [[0], [0]]
+        self.energyLoss = [0]
+        self.regGradMag = [0]
+        self.mainGradMag = [0]
+        self.eneryGradMag = [0]
+        self.batchCount = 0
+        self.saveRate = batchSaveRate
 
     def save(self, path=""):
         if path == "":
@@ -40,6 +53,9 @@ class Grengar:
 
     def losses(self):
         return self.reglosses, self.energyLoss
+
+    def gradMags(self):
+        return self.mainGradMag, self.eneryGradMag, self.regGradMag
 
     def forward(self, input):
         if len(input) < self.windowsize:
@@ -58,14 +74,46 @@ class Grengar:
         rl0 = []
         rl1 = []
         el  = []
+        rgm = []
+        mgm = []
+        egm = []
         for i in range(len(input) - self.windowsize - self.regSize + 1):
-            regloss0, regloss1, energyloss = self.step(input[i:i + self.windowsize + self.regSize - 1])
+            regloss0, regloss1, energyloss, regGradMag, mainGradMag, energyGradMag = self.step(input[i:i + self.windowsize + self.regSize - 1])
             rl0.append(regloss0)
             rl1.append(regloss1)
             el.append(energyloss)
-        self.reglosses[0].append(np.mean(rl0))
-        self.reglosses[1].append(np.mean(rl1))
-        self.energyLoss.append(np.mean(el))
+            rgm.append(regGradMag)
+            mgm.append(mainGradMag)
+            egm.append(energyGradMag)
+
+        self.reglosses[0][-1] += np.mean(rl0)
+        self.reglosses[1][-1] += np.mean(rl1)
+        self.energyLoss[-1] += np.mean(el)
+
+        self.regGradMag[-1] += np.mean(rgm)
+        self.mainGradMag[-1] += np.mean(mgm)
+        self.eneryGradMag[-1] += np.mean(egm)
+
+        self.batchCount += 1
+        if self.batchCount >= self.saveRate:
+            self.reglosses[0][-1] /= self.batchCount
+            self.reglosses[1][-1] /= self.batchCount
+            self.energyLoss[-1] /= self.batchCount
+
+            self.regGradMag[-1] /= self.batchCount
+            self.mainGradMag[-1] /= self.batchCount
+            self.eneryGradMag[-1] /= self.batchCount
+
+            self.batchCount = 0
+
+            self.reglosses[0].append(0)
+            self.reglosses[1].append(0)
+            self.energyLoss.append(0)
+
+            self.regGradMag.append(0)
+            self.mainGradMag.append(0)
+            self.eneryGradMag.append(0)
+
         self.reset()
 
     def reset(self):
@@ -85,38 +133,56 @@ class Grengar:
         y1 = np.convolve(self.regWeights1, c1, 'valid')[0]
         #get gradients
         linGrad, quaGrad, biasGrad = self.grangerGrad(x, x2, c0, y0, c1, y1)
+        #save values before adding
+        mainGradMag = sum(linGrad ** 2) + sum(quaGrad ** 2) + biasGrad ** 2
         lg, qg, bg, loss = self.energyGrad(x[:self.windowsize], x2[:self.windowsize], c0[0], c1[0])
+        energyGradMag = sum(lg ** 2) + sum(qg ** 2) + bg ** 2
         linGrad += lg * self.energyMult
         quaGrad += qg * self.energyMult
         biasGrad += bg * self.energyMult
         regGrad0, regGrad1, regBias0, regBias1, regLoss0, regLoss1 = self.regressionGrad(c0, y0, c1, y1)
-        #update grads
+        #adam update and step
+        self.firstMoment[0] = self.beta1 * self.firstMoment[0] + (1 - self.beta1) * linGrad
+        self.firstMoment[1] = self.beta1 * self.firstMoment[1] + (1 - self.beta1) * quaGrad
+        self.firstMomBias   = self.beta1 * self.firstMomBias + (1 - self.beta1) * biasGrad
+        self.secondMoment[0] = self.beta2 * self.secondMoment[0] + (1 - self.beta2) * (linGrad ** 2)
+        self.secondMoment[1] = self.beta2 * self.secondMoment[1] + (1 - self.beta2) * (quaGrad ** 2)
+        self.secondMomBias   = self.beta2 * self.secondMomBias + (1 - self.beta2) * (biasGrad ** 2)
+            #update weights
+        fmNorm = [self.firstMoment[0] / (1 - self.beta1),  self.firstMoment[1] / (1 - self.beta1)]
+        smNorm = [self.secondMoment[0] / (1 - self.beta2), self.secondMoment[1] / (1 - self.beta2)]
+        self.mainWeights[0] -= self.alphaMain * fmNorm[0] / (1e-10 + np.sqrt(smNorm[0]))
+        self.mainWeights[1] -= self.alphaMain * fmNorm[1] / (1e-10 + np.sqrt(smNorm[1]))
+        self.mainBias -= self.alphaMain * self.firstMomBias / (1 - self.beta1) / (1e-10 + np.sqrt(self.secondMomBias / (1 - self.beta2)))
+
         self.mainWeights[0] -= self.alphaMain * linGrad
         self.mainWeights[1] -= self.alphaMain * quaGrad
         self.mainBias       -= self.alphaMain * biasGrad
+        #update granger predictors
         self.regWeights0    -= self.alphaReg * regGrad0
         self.regBias0       -= self.alphaReg * regBias0
         self.regWeights1    -= self.alphaReg * regGrad1
         self.regBias1       -= self.alphaReg * regBias1
         #save losses
-        return regLoss0, regLoss1, loss
+        regGradMag = sum(regGrad0 ** 2) + sum(regGrad1 ** 2) + regBias0 ** 2 + regBias1 ** 2
+        return regLoss0, regLoss1, loss, np.sqrt(regGradMag) / len(regGrad0), np.sqrt(mainGradMag) / len(linGrad), np.sqrt(energyGradMag) * self.energyMult / len(linGrad)
 
     #x being an np.array of length windowsize, x2 being its square
     def energyGrad(self, x, x2, c0, c1):
         #update energies
-        self.inputEnergy = self.energyAlpha * self.inputEnergy + x2[-1]
-        self.chanelEneries[0] = self.energyAlpha * self.chanelEneries[0] + c0 * c0
-        self.chanelEneries[1] = self.energyAlpha * self.chanelEneries[1] + c1 * c1
+        self.inputEnergy = self.energyAlpha * self.inputEnergy + x2[-1] * (1 - self.energyAlpha)
+        self.chanelEneries[0] = self.energyAlpha * self.chanelEneries[0] + c0 * c0 * (1 - self.energyAlpha)
+        self.chanelEneries[1] = self.energyAlpha * self.chanelEneries[1] + c1 * c1 * (1 - self.energyAlpha)
         #update gradients
             #linear
-        self.energyGrads0[0] = self.energyAlpha * self.energyGrads0[0] + c0 * x
-        self.energyGrads0[1] = self.energyAlpha * self.energyGrads0[1] + c1 * x
+        self.energyGrads0[0] = self.energyAlpha * self.energyGrads0[0] + c0 * x * (1 - self.energyAlpha)
+        self.energyGrads0[1] = self.energyAlpha * self.energyGrads0[1] + c1 * x * (1 - self.energyAlpha)
             #quadratic
-        self.energyGrads1[0] = self.energyAlpha * self.energyGrads1[0] + c0 * x2
-        self.energyGrads1[1] = self.energyAlpha * self.energyGrads1[1] + c1 * x2
+        self.energyGrads1[0] = self.energyAlpha * self.energyGrads1[0] + c0 * x2 * (1 - self.energyAlpha)
+        self.energyGrads1[1] = self.energyAlpha * self.energyGrads1[1] + c1 * x2 * (1 - self.energyAlpha)
             #bias
-        self.energyGradBias[0] = self.energyAlpha * self.energyGradBias[0] + c0
-        self.energyGradBias[1] = self.energyAlpha * self.energyGradBias[1] + c1
+        self.energyGradBias[0] = self.energyAlpha * self.energyGradBias[0] + c0 * (1 - self.energyAlpha)
+        self.energyGradBias[1] = self.energyAlpha * self.energyGradBias[1] + c1 * (1 - self.energyAlpha)
         #return current gradient
             #linear
         gradLin = (2 * self.chanelEneries[0] - self.inputEnergy) * self.energyGrads0[0]

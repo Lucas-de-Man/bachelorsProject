@@ -28,12 +28,48 @@ class solveLinearReg:
         self.xySum += np.dot(inputMat.transpose(), target)
 
     def solve(self):
-        return np.dot(self.xySum, np.linalg.inv(self.xxSum))
+        result = np.dot(self.xySum, np.linalg.inv(self.xxSum))[0]
+        return result[:-1], result[-1]
+
+class solveQuadraticRegression:
+    def __init__(self, windowsize=256):
+        self.windowsize = windowsize
+        self.solution = np.empty(2 * windowsize + 1)
+        self.xxSum = np.zeros((2 * windowsize + 1, 2 * windowsize + 1))
+        self.xySum = np.zeros((1, 2 * windowsize + 1))
+
+    def addStep(self, signal, target):
+        target = target[self.windowsize // 2:-self.windowsize + self.windowsize // 2 + 1]
+        inputMat = np.empty((len(signal) - self.windowsize + 1, 2 * self.windowsize + 1))
+        #first line of matrix set
+        inputMat[0][2 * self.windowsize] = 1
+        for i in range(self.windowsize):
+            inputMat[0][i] = signal[i]
+            inputMat[0][i + self.windowsize] = signal[i] ** 2
+
+        for i in range(1, inputMat.shape[0]):
+            #bias
+            inputMat[i][2 * self.windowsize] = 1
+            #shift values
+            for j in range(self.windowsize - 1):
+                inputMat[i][j] = inputMat[i - 1][j + 1]
+                inputMat[i][j + self.windowsize] = inputMat[i - 1][j + self.windowsize + 1]
+            #set the new values in
+            inputMat[i][self.windowsize - 1] = signal[self.windowsize - 1 + i]
+            inputMat[i][2 * self.windowsize - 1] = signal[self.windowsize - 1 + i] ** 2
+
+        self.xxSum += np.dot(inputMat.transpose(), inputMat)
+        self.xySum += np.dot(inputMat.transpose(), target)
+
+    def solve(self):
+        solution = np.dot(self.xySum, np.linalg.inv(self.xxSum))[0]
+        #[linear, quadratic], bias
+        return [solution[:self.windowsize], solution[self.windowsize:2 * self.windowsize]], solution[-1]
 
 class Regression:
     def __init__(self, weights, bias):
         self.windowsize = len(weights)
-        self.weights = weights
+        self.weights = weights[::-1]
         self.bias = bias
 
     def forward(self, signal):
